@@ -29,14 +29,21 @@ read_declared() {
     let cfg = {};
     try { cfg = (JSON.parse(fs.readFileSync(process.argv[1], "utf8")).forgekit) || {}; } catch (e) {}
     const value = cfg[process.argv[2]];
-    if (Array.isArray(value)) process.stdout.write(value.filter(Boolean).join("\n"));
+    // Terminate every line, including the last. `read` returns false on an unterminated
+    // final line and the loop below would discard it -- which for a one-element array means
+    // the declaration reads back as empty.
+    if (Array.isArray(value)) {
+      for (const entry of value.filter(Boolean)) process.stdout.write(entry + "\n");
+    }
   ' "$ROOT_DIR/package.json" "$1" 2>/dev/null
 }
 
 SOURCE_GLOBS=(); REQUIRED_TOOLS=(); NODE_SUBPROJECTS=()
-while IFS= read -r line; do [ -n "$line" ] && SOURCE_GLOBS+=("$line"); done < <(read_declared sourceGlobs)
-while IFS= read -r line; do [ -n "$line" ] && REQUIRED_TOOLS+=("$line"); done < <(read_declared requiredTools)
-while IFS= read -r line; do [ -n "$line" ] && NODE_SUBPROJECTS+=("$line"); done < <(read_declared nodeSubprojects)
+# `|| [ -n "$line" ]` keeps a final unterminated line rather than dropping it, so the loop
+# stays correct even if the producer above ever stops emitting the trailing newline.
+while IFS= read -r line || [ -n "$line" ]; do [ -n "$line" ] && SOURCE_GLOBS+=("$line"); done < <(read_declared sourceGlobs)
+while IFS= read -r line || [ -n "$line" ]; do [ -n "$line" ] && REQUIRED_TOOLS+=("$line"); done < <(read_declared requiredTools)
+while IFS= read -r line || [ -n "$line" ]; do [ -n "$line" ] && NODE_SUBPROJECTS+=("$line"); done < <(read_declared nodeSubprojects)
 
 pass() { printf '  ok    %s\n' "$1"; }
 fail() { printf '  FAIL  %s\n        fix: %s\n' "$1" "$2"; FAILED=1; }
