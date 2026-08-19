@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "codegraph": {
+      "type": "stdio",
+      "command": "./node_modules/.bin/codegraph",
+      "args": ["serve", "--mcp"]
+    }
+  }
+}

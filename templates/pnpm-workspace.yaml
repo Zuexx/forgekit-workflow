@@ -1,0 +1,12 @@
+# pnpm 11 exits non-zero when a dependency's build script is skipped without a decision, so
+# these two have to be answered before `pnpm install` will succeed at all.
+#
+# @fission-ai/openspec's postinstall only prints an opt-in shell-completion hint.
+# msgpackr-extract is a native accelerator reached through grillme -> effect that falls back
+# to pure JS. Neither is needed, so both are declined.
+#
+# Written by `pnpm approve-builds '!@fission-ai/openspec' '!msgpackr-extract'` — let the tool
+# write this rather than hand-editing it; the key name is not what the error message suggests.
+allowBuilds:
+  '@fission-ai/openspec': false
+  msgpackr-extract: false

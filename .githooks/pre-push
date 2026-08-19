@@ -1,0 +1,192 @@
+#!/usr/bin/env bash
+#
+# Checks the OpenSpec <-> implementation-plan link before anything leaves the machine.
+#
+# Implementation plans cite OpenSpec task ids under "## OpenSpec Coverage" so that a
+# finished plan can be traced back to the tasks it was supposed to deliver. Nothing
+# generates or validates that section — OpenSpec does not know plans exist, and the plan
+# tooling does not know OpenSpec exists — so a citation that points at a task id which
+# was renumbered, or at a change that was renamed, is wrong in a way that produces no
+# error anywhere. This hook is the only thing that would notice.
+#
+# It refuses to guess. A push with no plan files passes untouched, and a citation is only
+# rejected when the change or the task id demonstrably does not exist.
+#
+# Enable with: git config core.hooksPath .githooks
+set -uo pipefail
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+PLAN_GLOB="docs/superpowers/plans"
+failures=0
+
+note() { printf '  %s\n' "$1" >&2; }
+
+# Resolve a change slug to its tasks.md, whether it is still active or already archived.
+tasks_file_for() {
+  local slug="$1" f
+  f="$REPO_ROOT/openspec/changes/$slug/tasks.md"
+  [ -f "$f" ] && { printf '%s' "$f"; return 0; }
+  f=$(find "$REPO_ROOT/openspec/changes/archive" -maxdepth 1 -type d -name "*-$slug" 2>/dev/null | head -1)
+  [ -n "$f" ] && [ -f "$f/tasks.md" ] && { printf '%s' "$f/tasks.md"; return 0; }
+  return 1
+}
+
+check_plan() {
+  local plan="$1"
+  local rel="${plan#"$REPO_ROOT"/}"
+
+  # Two windows, deliberately different sizes.
+  #
+  # ACCEPT — the heading to the next heading of any level, or a horizontal rule — is where a
+  # citation may be written. It is narrow so a plan's body cannot be mistaken for citations.
+  #
+  # REPORT — the heading to the next top-level heading or horizontal rule — is where a number is
+  # looked FOR. It is wider than ACCEPT, reaching past subheadings, so an id written just outside
+  # the accepted area is named rather than vanishing. Using one window for both meant a
+  # subheading turned a citation into nothing at all whenever some other id in the section
+  # happened to be well-formed. It stops at the rule that ends the coverage block rather than
+  # running to the next `## `, because a plan's body is full of version numbers and reporting
+  # them on every push is the noise that teaches people to stop reading the output.
+  #
+  # A `## ` or `# ` heading ends both regardless of fence state: a fence cannot legitimately
+  # contain a top-level heading, and honouring one let a single unterminated fence swallow the
+  # rest of the file. Intervals like `#{1,2}` are avoided because mawk 1.3.3 treats them
+  # literally.
+  #
+  # Every `N.M` in the REPORT window is either ACCEPTED as a citation — and must then resolve —
+  # or named in the output as not read. The one exception: a match followed by `.<digit>` is
+  # part of a longer version string and is suppressed from both, which is what keeps `1.9.0`
+  # from being read as `1.9`.
+  #
+  # Accepted forms, which openspec/config.yaml's apply guidance states:
+  #   - a table cell containing only ids, commas and spaces
+  #   - a list item beginning with an id run
+  local scan
+  scan=$(awk '
+    function take_run(s,   id) {
+      while (match(s, /^[0-9]+\.[0-9]+/)) {
+        id = substr(s, RSTART, RLENGTH)
+        s = substr(s, RSTART + RLENGTH)
+        if (s ~ /^\.[0-9]/) return
+        print "ID " id
+        if (s ~ /^[,[:space:]]+/) sub(/^[,[:space:]]+/, "", s); else break
+      }
+    }
+    {
+      if ($0 ~ /^```/) {
+        len = 0
+        while (substr($0, len + 1, 1) == "`") len++
+        if (!fence) { fence = 1; flen = len }
+        else if (len >= flen) { fence = 0 }
+      }
+    }
+    /^## OpenSpec Coverage/ { print "HDR"; report = 1; accept = 1; next }
+    {
+      # Only `## ` ignores fence state, because a fence cannot legitimately contain a top-level
+      # heading. A `# ` line is far more often a shell comment inside a fenced block, and a
+      # `---` is ordinary YAML — both must respect the fence or a fenced example ends the block.
+      if (report && $0 ~ /^## /) { report = 0; accept = 0; next }
+      if (report && !fence && $0 ~ /^---[[:space:]]*$/) { report = 0; accept = 0; next }
+      if (accept && !fence && ($0 ~ /^#/ || $0 ~ /^---[[:space:]]*$/)) accept = 0
+      if (!report) next
+
+      # Emphasis becomes a space rather than nothing: deleting it fused `**9**.**9**` into an
+      # id the author never wrote, while a space keeps `**1.1**` readable.
+      line = $0
+      gsub(/\*\*/, " ", line)
+      gsub(/`/, " ", line)
+
+      tmp = line
+      while (match(tmp, /[0-9]+\.[0-9]+/)) {
+        tok = substr(tmp, RSTART, RLENGTH)
+        rest = substr(tmp, RSTART + RLENGTH)
+        if (rest !~ /^\.[0-9]/) print "SEEN " tok
+        tmp = rest
+      }
+
+      if (!accept) next
+      print "ACC " line
+
+      if (line ~ /^[[:space:]]*\|/) {
+        n = split(line, cells, "|")
+        for (i = 1; i <= n; i++) {
+          c = cells[i]
+          gsub(/^[[:space:]]+|[[:space:]]+$/, "", c)
+          if (c ~ /^[0-9]+\.[0-9]+([,[:space:]]+[0-9]+\.[0-9]+)*$/) take_run(c)
+        }
+      } else if (line ~ /^[[:space:]]*[-*+][[:space:]]+/) {
+        sub(/^[[:space:]]*[-*+][[:space:]]+/, "", line)
+        take_run(line)
+      }
+    }
+  ' "$plan")
+
+  # Gate on whether the plan HAS a coverage section, not on whether that section produced
+  # readable lines. Returning early on an empty ACCEPT window skipped the reporting machinery
+  # entirely, so a plan listing every id under a `### ` subheading — the most natural way to get
+  # this wrong — passed with no output at all.
+  printf '%s\n' "$scan" | grep -q '^HDR$' || return 0
+
+  local section accepted seen unread
+  section=$(printf '%s\n' "$scan" | sed -n 's/^ACC //p')
+  accepted=$(printf '%s\n' "$scan" | sed -n 's/^ID //p' | sort -u)
+  seen=$(printf '%s\n' "$scan" | sed -n 's/^SEEN //p' | sort -u)
+
+  # Report before any check can return. Every guard below is a reason to refuse the push, and
+  # none of them is a reason to withhold what the hook did and did not read.
+  unread=$(comm -23 <(printf '%s\n' "$seen") <(printf '%s\n' "$accepted") | tr '\n' ' ')
+  unread=$(printf '%s' "$unread" | sed 's/[[:space:]]*$//')
+  if [ -n "$unread" ]; then
+    note "$rel: not read as task ids — $unread"
+    note "  (if any is a citation, put it in a cell of its own or start a list item with it)"
+  fi
+
+  if [ -z "$accepted" ]; then
+    note "$rel: OpenSpec Coverage cites no task ids"
+    note "  (put them in a table cell of their own, or start a list item with them)"
+    return 1
+  fi
+
+  local slug
+  slug=$(printf '%s' "$section" | grep -oE 'openspec/changes/[A-Za-z0-9._-]+' | head -1 | sed 's|openspec/changes/||')
+  if [ -z "$slug" ]; then
+    slug=$(printf '%s' "$section" | grep -oE '^[[:space:]]*[-*][[:space:]]+[A-Za-z0-9._-]+' | head -1 | awk '{print $2}')
+  fi
+
+  if [ -z "$slug" ]; then
+    note "$rel: OpenSpec Coverage names no change"
+    return 1
+  fi
+
+  local tasks
+  if ! tasks=$(tasks_file_for "$slug"); then
+    note "$rel: cites change '$slug', which exists neither in openspec/changes nor in its archive"
+    return 1
+  fi
+
+  local missing="" id
+  for id in $accepted; do
+    grep -qE "^[[:space:]]*-[[:space:]]*\[[ x]\][[:space:]]*$id([[:space:]]|\.)" "$tasks" || missing="$missing $id"
+  done
+
+  if [ -n "$missing" ]; then
+    note "$rel: cites task ids not present in $slug/tasks.md —$missing"
+    note "  (task ids are load-bearing; renumbering them breaks this link silently)"
+    return 1
+  fi
+
+  return 0
+}
+
+while IFS= read -r plan; do
+  [ -f "$plan" ] || continue
+  check_plan "$plan" || failures=$((failures + 1))
+done < <(find "$REPO_ROOT/$PLAN_GLOB" -type f -name '*.md' 2>/dev/null)
+
+if [ "$failures" -gt 0 ]; then
+  printf '\npush refused: %d implementation plan(s) cite OpenSpec tasks that do not resolve.\n' "$failures" >&2
+  printf 'Fix the citation, or the task ids it points at, then push again.\n' >&2
+  exit 1
+fi
+
+exit 0
