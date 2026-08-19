@@ -304,6 +304,14 @@ while IFS= read -r cap; do
       # `grilling` this was written for, resolving to nothing the repository provides.
       resolved=""
       [ -x "$BIN_DIR/$cap" ] && resolved=1
+      # A tool this repository declared as a stack requirement is part of its toolchain too.
+      # It was already checked for presence above; here the question is only whether the name
+      # is one the repository claims, so a stale citation still has nothing to resolve against.
+      if [ -z "$resolved" ] && [ "${#REQUIRED_TOOLS[@]}" -gt 0 ]; then
+        for tool in "${REQUIRED_TOOLS[@]}"; do
+          [ "$tool" = "$cap" ] && { resolved=1; break; }
+        done
+      fi
       if [ -z "$resolved" ] && [ "${#NODE_SUBPROJECTS[@]}" -gt 0 ]; then
         for sub in "${NODE_SUBPROJECTS[@]}"; do
           [ -x "$ROOT_DIR/$sub/node_modules/.bin/$cap" ] && { resolved=1; break; }
@@ -313,7 +321,7 @@ while IFS= read -r cap; do
         pass "$cap (declared tool)"
       else
         fail "\`$cap\` is not in the declared toolchain" \
-             "correct it in AGENTS.md, or declare it in package.json"
+             "correct it in AGENTS.md, or declare it in package.json (devDependencies or forgekit.requiredTools)"
       fi
       ;;
   esac
