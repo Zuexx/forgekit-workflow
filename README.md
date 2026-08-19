@@ -49,11 +49,24 @@ something other than source.
 cp <this-repo>/templates/package.json         ./package.json      # then fill in the forgekit block
 cp <this-repo>/templates/pnpm-workspace.yaml  ./pnpm-workspace.yaml
 git remote add workflow https://github.com/Zuexx/forgekit-workflow.git
+git fetch workflow main
 pnpm install
+
+# The first sync has to bring in the sync script itself. Fetch that one file with git, then
+# every sync after this is `pnpm sync-workflow`. Running it straight from `git show` does not
+# work: the script locates the repository root from its own path, and a process substitution
+# puts that path under /dev.
+git checkout workflow/main -- scripts/sync-workflow.sh
+chmod +x scripts/sync-workflow.sh
 pnpm sync-workflow
+
 git config core.hooksPath .githooks
+pnpm exec codegraph init
 pnpm preflight
 ```
+
+`openspec/config.yaml` has to exist before the first sync, holding this repository's own
+`schema:` and `context:`. `openspec init --tools claude` creates it.
 
 `pnpm preflight` is the acceptance test. It exits non-zero until the workflow genuinely works.
 
