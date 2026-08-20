@@ -19,6 +19,21 @@ builds a .NET API, an iOS app, or an Android app.
 | `.claude/settings.json` | Declares the Superpowers plugin |
 | `templates/` | Starting points a new repository copies once: `package.json` and `pnpm-workspace.yaml` |
 
+## Understanding the family
+
+Two documents describe the whole arrangement rather than any one repository, which is what
+neither the consumers' `AGENTS.md` files nor this table can do:
+
+- [`docs/FAMILY_OVERVIEW.md`](docs/FAMILY_OVERVIEW.md) — the four repositories as one system:
+  what each is for, what flows between them, the stack declaration, the governing rule and the
+  defects it caught, and why Godot is not among them.
+- [`docs/WORKFLOW_IN_PRACTICE.md`](docs/WORKFLOW_IN_PRACTICE.md) — how a change actually moves
+  through a repository: the two loops and who owns which, the three levels of granularity that
+  are easy to confuse, what each tool is for and the specific defect that put it there.
+
+[`docs/superpowers/specs/2026-08-19-multi-stack-workflow-design.md`](docs/superpowers/specs/2026-08-19-multi-stack-workflow-design.md)
+records why the arrangement is shaped this way, including the alternatives that were rejected.
+
 ## What a consuming repository owns
 
 Never synced, because it is the part that differs:
