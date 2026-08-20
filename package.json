@@ -1,0 +1,16 @@
+{
+  "//": "The workflow repository owns the specification of what the workflow must do, so it carries the OpenSpec CLI to evolve it. It is not a consuming project: it declares no forgekit stack block and runs no preflight, because preflight measures a project's workflow and this repository is not one.",
+  "name": "forgekit-workflow",
+  "private": true,
+  "packageManager": "pnpm@11.1.1",
+  "engines": {
+    "node": ">=22.16",
+    "pnpm": ">=11"
+  },
+  "scripts": {
+    "openspec": "openspec"
+  },
+  "devDependencies": {
+    "@fission-ai/openspec": "^1.9.0"
+  }
+}

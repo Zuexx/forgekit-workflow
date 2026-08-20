@@ -14,6 +14,7 @@ builds a .NET API, an iOS app, or an Android app.
 | `scripts/sync-workflow.sh` | Pulls these files into a consuming repository and splices the shared rules into its `openspec/config.yaml` |
 | `.githooks/pre-push` | Resolves the OpenSpec task ids an implementation plan claims to cover, and names every id it could not read |
 | `openspec/rules.yaml` | The shared `rules:` and `operations:` — the seam between OpenSpec's outer loop and Superpowers' inner loop |
+| `openspec/specs/workflow-toolchain/spec.md` | What the workflow must **do** — the checks preflight owes, what the sync may overwrite, and the rule that a check which cannot measure its subject fails. Delivered to every consumer so the repository bound by a requirement is the one that can read it |
 | `.mcp.json` | Declares the CodeGraph MCP server, by explicit bin path rather than `npx` |
 | `.claude/settings.json` | Declares the Superpowers plugin |
 | `templates/` | Starting points a new repository copies once: `package.json` and `pnpm-workspace.yaml` |
@@ -80,6 +81,17 @@ pnpm sync-workflow && pnpm preflight
 
 Edit here, never in a consuming repository — `sync-workflow` overwrites the shared files and
 the spliced region of `config.yaml`, and a local edit disappears without a word.
+
+That includes the specification. A change to what the workflow is *required* to do is proposed
+and archived here, through this repository's own OpenSpec instance, because a consumer receives
+`openspec/specs/workflow-toolchain/spec.md` read-only and the next sync would discard an archive
+written there.
+
+`codegraph_explore` returns nothing in this repository — everything here is shell, YAML, JSON or
+Markdown, and CodeGraph ships no extractor for any of them. Satisfy the proposal rule about
+grounding Impact through the alternative the rule itself names: search the literal, and say in
+the Impact section that you did. Reporting an empty graph result as a small blast radius would
+be false.
 
 There is no `pnpm preflight` in this repository, on purpose: preflight measures a project's
 workflow, and this repository is not a project. Changes are verified by syncing them into a

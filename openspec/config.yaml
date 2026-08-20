@@ -1,0 +1,162 @@
+schema: spec-driven
+
+context: |
+  forgekit-workflow owns the AI development workflow that every ForgeKit-family repository
+  runs — forgekit (.NET / Next.js), forgekit-ios (Swift / Tuist), forgekit-android
+  (Kotlin / Compose) — and the specification of what that workflow must do.
+
+  ## What lives here
+
+  - `scripts/preflight.sh`, `scripts/sync-workflow.sh`, `.githooks/pre-push`, `.mcp.json`,
+    `.claude/settings.json`, `openspec/rules.yaml`, and
+    `openspec/specs/workflow-toolchain/spec.md` are delivered to consuming repositories by
+    `pnpm sync-workflow`. They are read-only there; this is where they change.
+  - `templates/` holds the starting points a new consuming repository copies once.
+
+  ## Changes to the workflow are proposed here
+
+  A consuming repository receives the workflow and its specification but cannot evolve them:
+  the sync overwrites both, so an edit made there disappears without a word. A change that
+  alters what the workflow does, or what it is required to do, belongs in this repository.
+
+  ## The graph cannot see this repository
+
+  Everything here is a shell script, a JSON or YAML declaration, or Markdown. CodeGraph indexes
+  symbols and ships no extractor for any of them, so `codegraph_explore` returns nothing.
+
+  The proposal rule requiring the Impact section to be grounded in the graph is satisfied here
+  through the alternative the rule itself names: search the literal separately, and say in the
+  Impact section that you did. Reporting an empty graph result as a small blast radius would be
+  false, so do not do that.
+
+  ## Constraints
+
+  - Every change here reaches three repositories at once. Verify it by syncing it into one and
+    running `pnpm preflight` there — this repository has no preflight of its own, because
+    preflight measures a project's workflow and this repository is not a project.
+  - `scripts/sync-workflow.sh` is one of the files it installs, so it overwrites itself while
+    running. Its body lives in a function for that reason; keep it that way.
+  - Commits follow Conventional Commits.
+
+  ## Reference docs
+
+  - `README.md` — what this repository holds and how a consumer adopts it
+
+# >>> forgekit-workflow: managed region — edit in forgekit-workflow, not here
+
+# Shared workflow rules for every ForgeKit-family repository.
+#
+# This file is the single source of truth for the process half of openspec/config.yaml:
+# the `rules:` that shape planning artifacts and the `operations:` guidance that seams
+# OpenSpec (the outer loop: what may be built, and whether it counts as done) to
+# Superpowers (the inner loop: how it gets built, and whether it was built correctly).
+#
+# It carries nothing stack-specific on purpose. Each repository keeps its own `context:`
+# block — its stack, its layout, its conventions — and `pnpm sync-workflow` splices the
+# two together into that repository's openspec/config.yaml.
+#
+# Edit this file here, never in a consuming repository: sync-workflow overwrites the
+# spliced region and a local edit is lost without a word.
+
+rules:
+  proposal:
+    - Ground the Impact section in `codegraph_explore` rather than in an estimate.
+      Name the symbols the change touches and let the blast radius say how far it
+      reaches. "This is a small change" is a claim the graph can contradict, and
+      reading files to answer the same question costs more and misses the
+      dynamic-dispatch hops.
+    - Say what the change does not include. An unstated boundary is the one that
+      moves once implementation starts.
+    - Where the change alters behaviour something already depends on, say what would
+      break if it were wrong. `codegraph_explore` also reports which of those callers
+      have no covering tests; that is the part worth writing down.
+    - The graph indexes symbols, so it cannot see a contract addressed by string — an
+      HTTP header, an event name, a DI token, a feature flag, a config key. For those,
+      search the literal separately and say in the Impact section that you did.
+      Otherwise the section reads as though the graph confirmed something it never
+      examined.
+    - Check any figure before quoting it. A caller count from the graph includes
+      references that are not call sites, so "N callers" can be wrong in a section
+      whose whole purpose is to be trustworthy.
+
+  tasks:
+    # These tasks sit at feature granularity. An implementation plan expands each
+    # one into minute-level steps and reports back against the ids below, so the
+    # two levels have to stay distinct — decompose to steps here and the mapping
+    # between them stops meaning anything.
+    - Write each task as an outcome a reviewer would recognise as a unit of the
+      change. "Add the sign-up route" is a task; "create the file, then add the
+      import" is a step and belongs in the implementation plan.
+    - Number tasks hierarchically (1.1, 1.2, 2.1) and keep the numbers stable once
+      written. Implementation plans cite these ids to report what they covered, and
+      renumbering silently breaks that link.
+    - State for each task what would show it is done — a test that goes green, a
+      build that passes, an endpoint that answers. A task whose completion is a
+      matter of opinion can only be judged by whoever wrote it.
+    - Put decisions that block implementation in a leading section, settled before
+      any code is written rather than discovered mid-task.
+    - Prefer splitting by capability over splitting by file. A task that touches
+      twenty files to deliver one behaviour is still one task; a task that changes
+      one file for three unrelated reasons is three.
+
+operations:
+  # This project runs the outer loop here and the inner loop in Superpowers: OpenSpec
+  # decides what may be built and whether it counts as done, Superpowers decides how it
+  # gets built and whether it was built correctly. Neither knows the other exists, so
+  # the two guidance blocks below are the whole seam between them.
+  apply:
+    guidance:
+      - Expand these tasks into an implementation plan with
+        `superpowers:writing-plans` before touching code. This file holds
+        feature-level tasks; the plan holds the minute-level steps. Writing steps
+        here, or features there, collapses the two levels into one.
+      - Build the plan, and any long file, in segments rather than emitting it whole.
+        A single large write is all-or-nothing — a mistake anywhere in it surfaces only
+        afterwards, and by then the file is too big for one edit to target safely. Write
+        the skeleton, fill sections with successive edits, and check each as it lands —
+        for a script, run `bash -n` after each segment rather than once at the end.
+        Reaching for string-splicing to restructure a file you just wrote is the signal
+        you skipped this.
+      - Record which task ids a plan covers under an `## OpenSpec Coverage` heading.
+        Nothing generates that section — Superpowers has no knowledge of OpenSpec —
+        so without it there is no way to tell afterwards which of these tasks the
+        work actually delivered.
+      - Write those ids where they can be read mechanically, because they are. Put them
+        in a table cell holding nothing else, or start a list item with them. A pre-push
+        hook resolves what it reads and names every number it did not, so a citation is
+        never silently skipped — but a number it cannot read is one you have to write
+        again.
+      - Keep the whole coverage list above the first `---` under that heading. The hook
+        stops looking there, because a plan body below it is full of version numbers and
+        reporting those on every push is the noise that stops people reading the output.
+        An id added later, beneath the rule, is outside what the hook can see — which is
+        exactly the drift it exists to catch, so add it to the list above instead.
+      - Execute through `superpowers:subagent-driven-development` when its own decision
+        tree routes you there — it asks whether the tasks are mostly independent, and
+        sends tightly coupled ones to manual execution instead. Follow that answer
+        rather than dispatching subagents by default; a task and its own verification
+        are not independent work.
+      - Request review with `superpowers:requesting-code-review` whichever route the
+        work took, including when the change is small enough to have been done inline.
+        The reviewer's value is that it did not sit through this session — the things
+        worth catching are the ones you stopped questioning after the third read.
+      - Tick a task here only once its work is committed and its review passed. A tick
+        is a claim about the repository, not a note about intent.
+      - A test that asserts only an absence passes when the path leading to it broke.
+        Assert the absence beside something that establishes the path was taken — a
+        status, a returned value — or it stops pinning anything the day it matters.
+      - When a task turns out to be wrong, update the change rather than quietly
+        working around it. The change is the record of what was agreed; code that
+        silently disagrees with it leaves neither trustworthy.
+  archive:
+    guidance:
+      - Verify the implementation against this change's spec deltas, not against its
+        task checklist. Ticked boxes are a claim; the deltas are the acceptance
+        criteria, and they are what the next person will read.
+      - Run the verification commands and read their output in this session before
+        reporting the change complete, per
+        `superpowers:verification-before-completion`. A claim carrying no fresh
+        evidence is a guess wearing the grammar of a fact.
+      - Note anything the implementation did differently from the proposal, and why.
+        A design assumption that turned out wrong is the most useful thing an archive
+        can carry forward.

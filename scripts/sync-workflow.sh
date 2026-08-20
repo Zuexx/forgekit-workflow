@@ -36,6 +36,7 @@ SHARED_PATHS=(
   .mcp.json
   .claude/settings.json
   openspec/rules.yaml
+  openspec/specs/workflow-toolchain/spec.md
 )
 
 MARKER='# >>> forgekit-workflow: managed region — edit in forgekit-workflow, not here'
