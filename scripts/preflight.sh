@@ -84,6 +84,15 @@ else
   done
 fi
 
+# Say so when there are none. An empty nodeSubprojects is a real answer -- this repository has
+# no nested npm projects -- but it narrows where cited scripts and binaries are looked for, and
+# silence about that narrowing reads exactly like having searched everywhere.
+if [ "${#NODE_SUBPROJECTS[@]}" -eq 0 ]; then
+  echo "  --    no nested npm projects declared; scripts and bins resolve against the root only"
+else
+  pass "nested npm projects: ${NODE_SUBPROJECTS[*]}"
+fi
+
 echo "==> Workflow configuration"
 if [ ! -x "$BIN_DIR/openspec" ]; then
   fail "cannot read workflow configuration" "pnpm install"
@@ -163,8 +172,10 @@ else
   pass "core.hooksPath -> .githooks"
   # Git ignores a non-executable hook without saying so. `dotnet new` does not carry the
   # executable bit, so in a generated product every hook arrives unable to fire, silently.
+  hooks_found=0
   for hook in "$ROOT_DIR/.githooks"/*; do
     [ -f "$hook" ] || continue
+    hooks_found=$((hooks_found + 1))
     if [ -x "$hook" ]; then
       pass "$(basename "$hook") is executable"
     else
@@ -172,6 +183,12 @@ else
            "chmod +x .githooks/$(basename "$hook")"
     fi
   done
+  if [ "$hooks_found" -eq 0 ]; then
+    # Pointing core.hooksPath at an empty directory disables every hook while looking configured,
+    # and reporting only the path would pass on a repository with nothing left to fire.
+    fail "core.hooksPath is set but .githooks contains no hooks" \
+         "restore the hooks: pnpm sync-workflow"
+  fi
 fi
 
 echo "==> Capabilities cited by workflow instructions"
@@ -200,6 +217,15 @@ cited=$(
     grep -ohE '`(docs/[A-Za-z0-9._/-]*|[A-Za-z0-9._/-]+\.md)`' "${INSTRUCTION_FILES[@]}"
   } | grep -oE '`[^`]+`' | tr -d '`' | sort -u
 )
+
+# An instruction file that lists no capabilities at all is not a repository with nothing to
+# check -- it is a repository whose instruction files lost their citations, which is the
+# failure this whole section exists to catch. Zero citations therefore fails rather than
+# printing nothing and moving on.
+if [ -z "$(printf '%s' "$cited" | tr -d '[:space:]')" ]; then
+  fail "no capabilities are cited by AGENTS.md or openspec/config.yaml" \
+       "check that AGENTS.md still carries its capability tables"
+fi
 
 while IFS= read -r cap; do
   [ -z "$cap" ] && continue
