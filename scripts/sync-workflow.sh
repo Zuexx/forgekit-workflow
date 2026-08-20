@@ -9,6 +9,16 @@
 # Runs from a consuming repository, not from forgekit-workflow itself.
 set -uo pipefail
 
+
+# The whole body lives in a function on purpose. This script is one of the files it installs,
+# so it overwrites itself while running. Bash reads a script incrementally by byte offset, so a
+# replacement of a different length resumes execution partway through the new content — which
+# is silent, and produces errors pointing at lines that do not say what the error claims.
+# A function is parsed in full before any of it runs, which makes the overwrite harmless.
+#
+# The body is deliberately left unindented: it contains a heredoc, and indenting its terminator
+# is how the first attempt at this turned the whole file into an unterminated document.
+main() {
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 [ -n "$ROOT_DIR" ] && [ -d "$ROOT_DIR" ] || { echo "cannot resolve repository root" >&2; exit 1; }
 cd "$ROOT_DIR" || exit 1
@@ -129,3 +139,7 @@ if [ -n "$UNDELIVERED" ]; then
   exit 1
 fi
 echo "Workflow synced. Verify it reads back:  pnpm preflight"
+
+}
+
+main "$@"
