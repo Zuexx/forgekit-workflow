@@ -95,6 +95,10 @@ pnpm preflight
 pnpm sync-workflow && pnpm preflight
 ```
 
+When a sync **adds** a shared file, run `pnpm sync-workflow` twice: the first run replaces
+`sync-workflow.sh` itself but is already executing the old list, so the new path only arrives
+on the second run.
+
 ## Editing the workflow
 
 Edit here, never in a consuming repository — `sync-workflow` overwrites the shared files and
