@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Pulls the shared AI workflow from the forgekit-workflow repository into this one.
 #
-# What is shared is the process: preflight, the pre-push coverage hook, the MCP and plugin
-# declarations, and the OpenSpec rules and operation guidance. What is never shared is the
-# stack: this repository's own openspec `context:` block, its verify.sh, its package.json,
-# its AGENTS.md.
+# What is shared is the process: preflight, the branch-protection helper, the pre-commit and
+# pre-push hooks, the MCP and plugin declarations, and the OpenSpec rules and operation
+# guidance. What is never shared is the stack: this repository's own openspec `context:`
+# block, its verify.sh, its package.json, its AGENTS.md.
 #
 # Runs from a consuming repository, not from forgekit-workflow itself.
 set -uo pipefail
@@ -32,6 +32,8 @@ BRANCH="${WORKFLOW_BRANCH:-main}"
 SHARED_PATHS=(
   scripts/preflight.sh
   scripts/sync-workflow.sh
+  scripts/protect-branch.sh
+  .githooks/pre-commit
   .githooks/pre-push
   .mcp.json
   .claude/settings.json
@@ -81,7 +83,7 @@ done
 
 # git does not carry the executable bit through `git show`, and a hook without it is ignored
 # by git without a word — the failure that went unnoticed in every generated product.
-chmod +x scripts/preflight.sh scripts/sync-workflow.sh .githooks/* 2>/dev/null
+chmod +x scripts/preflight.sh scripts/sync-workflow.sh scripts/protect-branch.sh .githooks/* 2>/dev/null
 
 echo "==> Splicing shared rules into openspec/config.yaml"
 CONFIG="openspec/config.yaml"
