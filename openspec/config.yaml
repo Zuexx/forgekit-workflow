@@ -7,10 +7,11 @@ context: |
 
   ## What lives here
 
-  - `scripts/preflight.sh`, `scripts/sync-workflow.sh`, `.githooks/pre-push`, `.mcp.json`,
-    `.claude/settings.json`, `openspec/rules.yaml`, and
-    `openspec/specs/workflow-toolchain/spec.md` are delivered to consuming repositories by
-    `pnpm sync-workflow`. They are read-only there; this is where they change.
+  - `scripts/preflight.sh`, `scripts/sync-workflow.sh`, `scripts/protect-branch.sh`,
+    `.githooks/pre-commit`, `.githooks/pre-push`, `.mcp.json`, `.claude/settings.json`,
+    `openspec/rules.yaml`, and `openspec/specs/workflow-toolchain/spec.md` are delivered to
+    consuming repositories by `pnpm sync-workflow`. They are read-only there; this is where
+    they change.
   - `templates/` holds the starting points a new consuming repository copies once.
 
   ## Changes to the workflow are proposed here

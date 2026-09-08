@@ -57,6 +57,12 @@ time, unable to fire at all: `dotnet new` does not carry the executable bit, and
 non-executable hook without reporting anything — so every generated product had a hook that had
 never run.
 
+**The pre-commit hook** refuses a commit made while `HEAD` is on `main` or `master`: every
+change to the integration branch has to arrive through a branch and a pull request. It is a
+local catch, and `git commit --no-verify` steps over it — `scripts/protect-branch.sh` applies
+the matching GitHub ruleset so the same rule holds on the remote, for every clone, with no
+bypass. Run that helper once per repository.
+
 **preflight** answers whether any of this actually works on this machine: are the declared tools
 installed, does `openspec/config.yaml` still yield its rules through the installed version, does
 the code index reflect current source, can the hooks fire, and does every capability the
