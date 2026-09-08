@@ -4,7 +4,7 @@ protection, review count, bypass list, idempotency by lookup, merge-commit behav
 
 ## 1. Local commit gate
 
-- [ ] 1.1 Add `.githooks/pre-commit` that refuses a commit while `HEAD` is on `main` or
+- [x] 1.1 Add `.githooks/pre-commit` that refuses a commit while `HEAD` is on `main` or
   `master`, naming the branch and printing the command to move the staged work onto a new
   branch, and takes no action on any other branch or a detached `HEAD`.
   _Done when:_ `bash -n` is clean (and `shellcheck` if present); in a throwaway repo with
@@ -23,10 +23,14 @@ protection, review count, bypass list, idempotency by lookup, merge-commit behav
   exactly one ruleset carrying the three rules and an empty bypass list; a direct
   `git push origin <default>` is rejected by the remote; a second run still shows exactly one
   ruleset; invoking it with `gh` logged out exits non-zero naming the prerequisite.
+  _Status:_ script written; `--dry-run` verified (correct `POST`/payload, three rules,
+  `bypass_actors: []`, prerequisite check fires). The remote apply and its read-back /
+  rejected-push confirmation are pending — run `bash scripts/protect-branch.sh` against a
+  real repository, then tick.
 
 ## 3. Delivery through the sync
 
-- [ ] 3.1 Add `.githooks/pre-commit` and `scripts/protect-branch.sh` to `SHARED_PATHS` in
+- [x] 3.1 Add `.githooks/pre-commit` and `scripts/protect-branch.sh` to `SHARED_PATHS` in
   `scripts/sync-workflow.sh`, add `scripts/protect-branch.sh` to its `chmod +x` line, and
   update the script's header comment to name the new commit gate.
   _Done when:_ in a consuming repository, `pnpm sync-workflow` writes both files, both are
@@ -34,7 +38,7 @@ protection, review count, bypass list, idempotency by lookup, merge-commit behav
 
 ## 4. Document the shared-file boundary
 
-- [ ] 4.1 List `.githooks/pre-commit` and `scripts/protect-branch.sh` as shared files, and
+- [x] 4.1 List `.githooks/pre-commit` and `scripts/protect-branch.sh` as shared files, and
   describe the one-time `protect-branch.sh` step, in `README.md`,
   `docs/WORKFLOW_IN_PRACTICE.md`, `docs/FAMILY_OVERVIEW.md`, and the shared-file list in the
   `context:` block of `openspec/config.yaml`.
@@ -43,11 +47,11 @@ protection, review count, bypass list, idempotency by lookup, merge-commit behav
 
 ## 5. Verify against a real consuming repository
 
-- [ ] 5.1 Sync this change into one consuming repository (`WORKFLOW_REMOTE` pointed at this
+- [x] 5.1 Sync this change into one consuming repository (`WORKFLOW_REMOTE` pointed at this
   working tree) and run `pnpm preflight` there.
   _Done when:_ `pnpm preflight` exits 0 and its git-hooks section reports `pre-commit` as an
   executable hook alongside `pre-push`.
-- [ ] 5.2 Confirm `.githooks/pre-commit` is not excluded by `forgekit`'s `.template.config`
+- [x] 5.2 Confirm `.githooks/pre-commit` is not excluded by `forgekit`'s `.template.config`
   (it should receive the same treatment as `.githooks/pre-push`).
   _Done when:_ the template's exclude globs are inspected and do not match the new hook; if
   they do, that fix is recorded as a follow-up change in `forgekit` rather than done here.
