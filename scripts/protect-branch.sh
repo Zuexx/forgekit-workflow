@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
 #
 # Applies branch protection to a repository's default branch: a pull request is required before
-# a change can merge, force-pushes and branch deletion are refused, and no actor is exempt.
+# a change can merge, force-pushes and branch deletion are refused, and no actor is exempt. Also
+# restricts how a pull request may land: merge commits stay enabled, squash and rebase merging
+# are disabled — the family default is `git merge --no-ff`, keeping the branch's own commit
+# history, not squashing it away. A specific PR that should be squashed is handled by hand for
+# that one case, not by leaving the button on for every repository.
 # Run once per repository, from inside a clone. Safe to run again — it updates its own ruleset
-# in place rather than adding a second one.
+# in place rather than adding a second one, and re-applying the merge-method setting is a no-op.
 #
 # This is the half the pre-commit hook cannot cover: a hook lives on one machine and
 # `git commit --no-verify` steps over it, whereas this is enforced by GitHub on every push.
@@ -65,10 +69,13 @@ else
   method=POST; path="repos/$repo/rulesets"
 fi
 
+merge_method_args=(--enable-merge-commit --enable-squash-merge=false --enable-rebase-merge=false)
+
 if [ "$DRY_RUN" -eq 1 ]; then
   echo "# dry run — no changes made"
   echo "$method /$path"
   echo "$payload"
+  echo "gh repo edit $repo ${merge_method_args[*]}"
   exit 0
 fi
 
@@ -77,4 +84,10 @@ printf '%s' "$payload" | gh api -X "$method" "$path" --input - >/dev/null || {
   exit 1
 }
 
+gh repo edit "$repo" "${merge_method_args[@]}" >/dev/null || {
+  echo "failed to set the allowed merge methods on $repo" >&2
+  exit 1
+}
+
 echo "protected: $repo — '$branch' now requires a pull request; force-push and deletion refused; no bypass."
+echo "merge method: $repo now allows merge commits only — squash and rebase merging are disabled."

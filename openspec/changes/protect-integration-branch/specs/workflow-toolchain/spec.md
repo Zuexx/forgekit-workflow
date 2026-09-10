@@ -20,6 +20,13 @@ and branch deletion refused, and no actor exempt from the rule. It SHALL be run 
 repository and SHALL be safe to run again, converging on the same protection rather than
 stacking a second rule.
 
+The same command SHALL restrict how a pull request is allowed to land: merging via a real merge
+commit SHALL remain enabled, and merging via squash or via rebase SHALL be disabled at the
+repository level, so a change to the default branch always arrives with its own history intact.
+This is the default for every repository in the family; a specific merge squashed by explicit
+request is out of scope for this command and is handled by hand for that one case, not by
+leaving squash merging enabled generally.
+
 Verifying that the remote protection is actually in place on a given repository is out of scope
 for the preflight check, which measures the local workflow and does not reach the network.
 
@@ -60,3 +67,9 @@ for the preflight check, which measures the local workflow and does not reach th
   already protected
 - **THEN** the repository ends in the same protected state
 - **AND** the protection is defined by one rule, not two
+
+#### Scenario: The remote protection command restricts the merge method
+
+- **WHEN** the declared branch-protection command is run inside a repository clone
+- **THEN** merging a pull request via a merge commit remains enabled on that repository
+- **AND** merging a pull request via squash or via rebase is disabled on that repository

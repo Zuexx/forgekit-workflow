@@ -27,6 +27,14 @@ protection, review count, bypass list, idempotency by lookup, merge-commit behav
   `bypass_actors: []`, prerequisite check fires). The remote apply and its read-back /
   rejected-push confirmation are pending — run `bash scripts/protect-branch.sh` against a
   real repository, then tick.
+- [x] 2.2 Extend `scripts/protect-branch.sh` to also set the repository's allowed PR merge
+  methods: `gh repo edit "$repo" --enable-merge-commit --enable-squash-merge=false
+  --enable-rebase-merge=false`, printed (not executed) under `--dry-run`, run after the
+  ruleset succeeds under a real run, and failing the script with a named error if it fails.
+  _Done when:_ `test/protect-branch.test.sh` (new) passes against a stubbed `gh` — `--dry-run`
+  output names `owner/repo`, all three ruleset rules, and the `gh repo edit` command with the
+  three merge-method flags; a real run against a scratch GitHub repo is deferred the same way
+  as 2.1's remote apply.
 
 ## 3. Delivery through the sync
 

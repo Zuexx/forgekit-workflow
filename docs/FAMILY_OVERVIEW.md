@@ -40,7 +40,8 @@ Shared, overwritten on every sync:
 ```
 scripts/preflight.sh                          is the workflow operational here?
 scripts/sync-workflow.sh                      the sync itself
-scripts/protect-branch.sh                     once per repo: default branch requires a PR
+scripts/protect-branch.sh                     once per repo: default branch requires a PR,
+                                               merges land as merge commits (no squash/rebase)
 .githooks/pre-commit                          no commits straight onto main/master
 .githooks/pre-push                            plans must cite OpenSpec task ids that resolve
 .mcp.json                                     the CodeGraph MCP server

@@ -74,6 +74,18 @@ because merges are meant to happen through the PR on GitHub. `git pull --ff-only
 creates no commit and is unaffected. A `git pull` that would need a merge commit on `main` is
 refused, which is the right signal that local `main` has diverged from the remote.
 
+### The remote helper also disables squash and rebase merging
+
+`gh repo edit` sets the repository's allowed PR merge methods alongside the ruleset:
+`--enable-merge-commit --enable-squash-merge=false --enable-rebase-merge=false`. A squash or a
+rebase merge discards the branch's own commit history — exactly the history the family's TDD
+discipline and commit-by-commit review are meant to leave behind. Disabling the buttons makes
+"land as a merge commit" the only option GitHub itself offers, rather than a convention a
+person or an agent has to remember on every PR. This is the default for the family, not an
+absolute: a specific PR that genuinely should be squashed is handled by hand for that one case
+(temporarily re-enabling squash merging, or squashing locally before merge) rather than by
+leaving the button on for every repository.
+
 ### `--no-verify` stays an escape hatch
 
 The hook honours `git commit --no-verify`. This is consistent with the family rule that a hook

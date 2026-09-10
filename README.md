@@ -14,7 +14,7 @@ builds a .NET API, an iOS app, or an Android app.
 | `scripts/sync-workflow.sh` | Pulls these files into a consuming repository and splices the shared rules into its `openspec/config.yaml` |
 | `.githooks/pre-commit` | Refuses a commit made directly on `main`/`master` — every change to the integration branch has to arrive through a branch and a PR |
 | `.githooks/pre-push` | Resolves the OpenSpec task ids an implementation plan claims to cover, and names every id it could not read |
-| `scripts/protect-branch.sh` | Run once per repository: applies a GitHub ruleset so the default branch requires a pull request, with no bypass |
+| `scripts/protect-branch.sh` | Run once per repository: applies a GitHub ruleset so the default branch requires a pull request, with no bypass, and restricts merging to merge commits — squash and rebase merging are disabled |
 | `openspec/rules.yaml` | The shared `rules:` and `operations:` — the seam between OpenSpec's outer loop and Superpowers' inner loop |
 | `openspec/specs/workflow-toolchain/spec.md` | What the workflow must **do** — the checks preflight owes, what the sync may overwrite, and the rule that a check which cannot measure its subject fails. Delivered to every consumer so the repository bound by a requirement is the one that can read it |
 | `.mcp.json` | Declares the CodeGraph MCP server, by explicit bin path rather than `npx` |
