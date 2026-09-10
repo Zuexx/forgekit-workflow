@@ -57,6 +57,19 @@ time, unable to fire at all: `dotnet new` does not carry the executable bit, and
 non-executable hook without reporting anything — so every generated product had a hook that had
 never run.
 
+**The pre-commit hook** refuses a commit made while `HEAD` is on `main` or `master`: every
+change to the integration branch has to arrive through a branch and a pull request. It is a
+local catch, and `git commit --no-verify` steps over it — `scripts/protect-branch.sh` applies
+the matching GitHub ruleset so the same rule holds on the remote, for every clone, with no
+bypass. Run that helper once per repository.
+
+That branch, once finished, lands as a merge commit — `git merge --no-ff`, or the PR's "Create a
+merge commit" button — not a squash. `protect-branch.sh` disables the squash- and rebase-merge
+buttons on the repository for exactly this reason: a squash discards the branch's own commit
+history, which is what the family's commit-by-commit discipline is meant to leave behind. This
+is the default for every repository; a specific PR that should be squashed is a one-off handled
+by hand, not a reason to leave the button on generally.
+
 **preflight** answers whether any of this actually works on this machine: are the declared tools
 installed, does `openspec/config.yaml` still yield its rules through the installed version, does
 the code index reflect current source, can the hooks fire, and does every capability the

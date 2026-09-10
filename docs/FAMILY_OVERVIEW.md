@@ -31,7 +31,7 @@ repository, and the three starters consume it.
 
 ## How the sharing works
 
-`forgekit-workflow` owns seven files. Each consuming repository adds it as a second git remote
+`forgekit-workflow` owns nine files. Each consuming repository adds it as a second git remote
 and runs `pnpm sync-workflow`, which copies those files in and splices the shared OpenSpec rules
 into the repository's own `openspec/config.yaml` below a marker line.
 
@@ -40,6 +40,9 @@ Shared, overwritten on every sync:
 ```
 scripts/preflight.sh                          is the workflow operational here?
 scripts/sync-workflow.sh                      the sync itself
+scripts/protect-branch.sh                     once per repo: default branch requires a PR,
+                                               merges land as merge commits (no squash/rebase)
+.githooks/pre-commit                          no commits straight onto main/master
 .githooks/pre-push                            plans must cite OpenSpec task ids that resolve
 .mcp.json                                     the CodeGraph MCP server
 .claude/settings.json                         the Superpowers plugin

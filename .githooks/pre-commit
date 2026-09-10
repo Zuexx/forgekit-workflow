@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+#
+# Refuses a commit made straight onto an integration branch. Every change to main/master is
+# meant to arrive through a branch and a pull request; a commit made while HEAD is on that
+# branch has gone around the mechanism, and nothing downstream can tell it apart from one that
+# did not. This hook is the point where the mistake is still one `git switch -c` away from
+# being undone.
+#
+# It refuses to guess: a detached HEAD (rebase, bisect, a checked-out commit) and any branch
+# that is not an integration branch pass untouched. `git commit --no-verify` bypasses it, and
+# the remote branch-protection ruleset is the backstop for that.
+#
+# Enable with: git config core.hooksPath .githooks
+set -uo pipefail
+
+# The branches a commit must not land on directly. The family standardises on `main`; `master`
+# is covered so a repository initialised the older way needs no reconfiguration.
+INTEGRATION_BRANCHES="main master"
+
+branch=$(git symbolic-ref --quiet --short HEAD 2>/dev/null || true)
+
+# Detached HEAD: there is no branch to protect, and the commit is almost certainly a rebase
+# step or a tool rather than a person.
+[ -n "$branch" ] || exit 0
+
+for protected in $INTEGRATION_BRANCHES; do
+  [ "$branch" = "$protected" ] || continue
+  exec >&2
+  echo
+  echo "  Commit refused: HEAD is on \"$branch\"."
+  echo "  Every change to \"$branch\" has to arrive through a branch and a pull request."
+  echo
+  echo "  Move the staged changes onto a branch and commit there:"
+  echo "    git switch -c <branch-name>"
+  echo "    git commit ..."
+  echo "    git push -u origin <branch-name> && gh pr create"
+  echo
+  echo "  Deliberate one-off (the push to \"$branch\" is still refused by branch protection):"
+  echo "    git commit --no-verify"
+  echo
+  exit 1
+done
+
+exit 0

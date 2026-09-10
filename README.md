@@ -12,7 +12,9 @@ builds a .NET API, an iOS app, or an Android app.
 |---|---|
 | `scripts/preflight.sh` | Reports whether the workflow is actually operational on this machine — tools installed, config readable, index current, hooks able to fire, every cited capability resolving |
 | `scripts/sync-workflow.sh` | Pulls these files into a consuming repository and splices the shared rules into its `openspec/config.yaml` |
+| `.githooks/pre-commit` | Refuses a commit made directly on `main`/`master` — every change to the integration branch has to arrive through a branch and a PR |
 | `.githooks/pre-push` | Resolves the OpenSpec task ids an implementation plan claims to cover, and names every id it could not read |
+| `scripts/protect-branch.sh` | Run once per repository: applies a GitHub ruleset so the default branch requires a pull request, with no bypass, and restricts merging to merge commits — squash and rebase merging are disabled |
 | `openspec/rules.yaml` | The shared `rules:` and `operations:` — the seam between OpenSpec's outer loop and Superpowers' inner loop |
 | `openspec/specs/workflow-toolchain/spec.md` | What the workflow must **do** — the checks preflight owes, what the sync may overwrite, and the rule that a check which cannot measure its subject fails. Delivered to every consumer so the repository bound by a requirement is the one that can read it |
 | `.mcp.json` | Declares the CodeGraph MCP server, by explicit bin path rather than `npx` |
@@ -77,6 +79,7 @@ chmod +x scripts/sync-workflow.sh
 pnpm sync-workflow
 
 git config core.hooksPath .githooks
+bash scripts/protect-branch.sh   # once per GitHub repo: require a PR for the default branch
 pnpm exec codegraph init
 pnpm preflight
 ```
@@ -91,6 +94,10 @@ pnpm preflight
 ```bash
 pnpm sync-workflow && pnpm preflight
 ```
+
+When a sync **adds** a shared file, run `pnpm sync-workflow` twice: the first run replaces
+`sync-workflow.sh` itself but is already executing the old list, so the new path only arrives
+on the second run.
 
 ## Editing the workflow
 
