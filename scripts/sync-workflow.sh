@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Pulls the shared AI workflow from the forgekit-workflow repository into this one.
 #
-# What is shared is the process: preflight, the branch-protection helper, the pre-commit and
-# pre-push hooks, the MCP and plugin declarations, and the OpenSpec rules and operation
-# guidance. What is never shared is the stack: this repository's own openspec `context:`
-# block, its verify.sh, its package.json, its AGENTS.md.
+# What is shared is the process: preflight, the branch-protection helper, the Dependabot
+# auto-merge workflow, the pre-commit and pre-push hooks, the MCP and plugin declarations, and
+# the OpenSpec rules and operation guidance. What is never shared is the stack: this
+# repository's own openspec `context:` block, its verify.sh, its package.json, its AGENTS.md.
 #
 # Runs from a consuming repository, not from forgekit-workflow itself.
 set -uo pipefail
@@ -33,6 +33,7 @@ SHARED_PATHS=(
   scripts/preflight.sh
   scripts/sync-workflow.sh
   scripts/protect-branch.sh
+  .github/workflows/dependabot-auto-merge.yml
   .githooks/pre-commit
   .githooks/pre-push
   .mcp.json
