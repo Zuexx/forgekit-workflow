@@ -1,0 +1,71 @@
+name: Dependabot auto-merge
+
+# Automates the boring half of Dependabot triage: a single-dependency PR that is patch or minor
+# and whose other checks are green merges itself, as a merge commit — never a squash, matching
+# this family's merge-method default (protect-branch.sh). Grouped updates (more than one
+# dependency in one PR) and major version bumps are deliberately left open for manual review;
+# see openspec/changes/archive/*/dependabot-auto-merge/design.md for why.
+#
+# Waits by polling `gh pr checks`, excluding this job's own check, rather than relying on
+# GitHub's native PR auto-merge — none of this family's repositories mark any status check
+# "required", and native auto-merge's wait behaviour is defined in terms of required checks.
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  auto-merge:
+    name: Dependabot auto-merge
+    if: github.actor == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Dependabot metadata
+        id: metadata
+        uses: dependabot/fetch-metadata@v2
+        with:
+          github-token: "${{ secrets.GITHUB_TOKEN }}"
+
+      - name: Wait for the other checks on this PR, then merge
+        if: |
+          steps.metadata.outputs.dependency-group == '' &&
+          (steps.metadata.outputs.update-type == 'version-update:semver-patch' ||
+           steps.metadata.outputs.update-type == 'version-update:semver-minor')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          SELF_CHECK: "Dependabot auto-merge"
+        run: |
+          set -euo pipefail
+          echo "eligible: ${{ steps.metadata.outputs.dependency-names }} (${{ steps.metadata.outputs.update-type }})"
+          for i in $(seq 1 90); do
+            all="$(gh pr checks "$PR_URL" --json name,bucket)"
+            others="$(echo "$all" | jq --arg self "$SELF_CHECK" '[.[] | select(.name != $self)]')"
+            count="$(echo "$others" | jq 'length')"
+            if [ "$count" -eq 0 ]; then
+              echo "no other checks reported yet (attempt $i/90)"
+              sleep 10
+              continue
+            fi
+            failing="$(echo "$others" | jq '[.[] | select(.bucket == "fail")] | length')"
+            if [ "$failing" -gt 0 ]; then
+              echo "a check failed — leaving this PR for manual review:"
+              echo "$others" | jq .
+              exit 1
+            fi
+            pending="$(echo "$others" | jq '[.[] | select(.bucket == "pending")] | length')"
+            if [ "$pending" -eq 0 ]; then
+              echo "all other checks passed:"
+              echo "$others" | jq .
+              gh pr merge "$PR_URL" --merge --delete-branch
+              exit 0
+            fi
+            echo "$pending check(s) still pending (attempt $i/90)"
+            sleep 10
+          done
+          echo "timed out waiting for checks to finish" >&2
+          exit 1

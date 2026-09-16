@@ -70,6 +70,15 @@ history, which is what the family's commit-by-commit discipline is meant to leav
 is the default for every repository; a specific PR that should be squashed is a one-off handled
 by hand, not a reason to leave the button on generally.
 
+**Dependabot's own PRs mostly merge themselves.** `.github/workflows/dependabot-auto-merge.yml`
+waits for a Dependabot PR's other checks to finish, then merges it — but only when it touches
+exactly one dependency and the bump is patch or minor. A grouped update (several dependencies
+bundled by `dependabot.yml`'s `groups:`) or a major version bump is left open on purpose: those
+carry more blast radius and are where a second look is worth keeping. It polls checks itself
+rather than using GitHub's native PR auto-merge, because none of this family's repositories mark
+any check "required" (`protect-branch.sh`'s ruleset requires a pull request, not a specific
+check), and native auto-merge's wait behaviour is defined in terms of required checks.
+
 **preflight** answers whether any of this actually works on this machine: are the declared tools
 installed, does `openspec/config.yaml` still yield its rules through the installed version, does
 the code index reflect current source, can the hooks fire, and does every capability the

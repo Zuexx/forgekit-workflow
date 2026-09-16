@@ -42,6 +42,8 @@ scripts/preflight.sh                          is the workflow operational here?
 scripts/sync-workflow.sh                      the sync itself
 scripts/protect-branch.sh                     once per repo: default branch requires a PR,
                                                merges land as merge commits (no squash/rebase)
+.github/workflows/dependabot-auto-merge.yml   merges single-dep patch/minor Dependabot PRs once
+                                               green; groups and majors wait for manual review
 .githooks/pre-commit                          no commits straight onto main/master
 .githooks/pre-push                            plans must cite OpenSpec task ids that resolve
 .mcp.json                                     the CodeGraph MCP server
