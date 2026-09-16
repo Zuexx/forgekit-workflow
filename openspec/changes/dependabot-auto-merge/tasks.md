@@ -2,7 +2,7 @@ No open questions in design.md.
 
 ## 1. The workflow
 
-- [ ] 1.1 Add `.github/workflows/dependabot-auto-merge.yml`: triggered on `pull_request`
+- [x] 1.1 Add `.github/workflows/dependabot-auto-merge.yml`: triggered on `pull_request`
   (`opened`, `reopened`, `synchronize`), gated to `github.actor == 'dependabot[bot]'`, using
   `dependabot/fetch-metadata@v2` to read `update-type` and `dependency-group`, and — only when
   `dependency-group` is empty and `update-type` is patch or minor — polling `gh pr checks
@@ -18,23 +18,32 @@ No open questions in design.md.
 
 ## 2. Delivery through the sync
 
-- [ ] 2.1 Add `.github/workflows/dependabot-auto-merge.yml` to `SHARED_PATHS` in
+- [x] 2.1 Add `.github/workflows/dependabot-auto-merge.yml` to `SHARED_PATHS` in
   `scripts/sync-workflow.sh`, and mention it in the script's header comment alongside the other
   shared files.
   _Done when:_ in a consuming repository, `pnpm sync-workflow` (run twice, per the two-run sync
   note already in `docs/WORKFLOW_IN_PRACTICE.md`) writes the file, and a second run afterward
   reports no changes.
+  _Verified:_ synced into `forgekit`, `forgekit-ios`, and `forgekit-android` on 2026-09-16 (each
+  two-pass, per the note above); `pnpm preflight` reported the workflow operational in all
+  three.
 
 ## 3. Document and verify against a real consuming repository
 
-- [ ] 3.1 Sync this change into `forgekit` and confirm the workflow is present and valid there
+- [x] 3.1 Sync this change into `forgekit` and confirm the workflow is present and valid there
   (`gh workflow list` shows it, or `gh workflow view` if GitHub has not yet indexed it from an
   unmerged branch).
   _Done when:_ the file is present in `forgekit` at the expected path, and once merged to
   `forgekit`'s `main`, the next single-dependency patch/minor Dependabot PR there is observed
   to merge itself (checked at task close-out or noted as still pending a live Dependabot PR if
   none has appeared yet).
-- [ ] 3.2 List `.github/workflows/dependabot-auto-merge.yml` as a shared file, and describe what
+  _Status:_ present at the expected path in `forgekit` (merged to `main` via PR #63,
+  2026-09-16); its own PR there showed the `Dependabot auto-merge` check as `skipping` for a
+  non-Dependabot actor, confirming the gate reads correctly on a live run. This session's own
+  triage merged every then-open Dependabot PR in `forgekit` beforehand, so none was in flight
+  to observe merging itself live — noted as pending the next real Dependabot PR, per this
+  task's own accepted done-when.
+- [x] 3.2 List `.github/workflows/dependabot-auto-merge.yml` as a shared file, and describe what
   it automates and what it deliberately leaves for manual review, in `README.md`,
   `docs/WORKFLOW_IN_PRACTICE.md`, `docs/FAMILY_OVERVIEW.md`, and the shared-file list in the
   `context:` block of `openspec/config.yaml`.
