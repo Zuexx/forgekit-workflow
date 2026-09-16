@@ -13,7 +13,7 @@ protection, review count, bypass list, idempotency by lookup, merge-commit behav
 
 ## 2. Remote branch protection helper
 
-- [ ] 2.1 Add `scripts/protect-branch.sh` that applies a rulesets-based protection to the
+- [x] 2.1 Add `scripts/protect-branch.sh` that applies a rulesets-based protection to the
   repository's default branch — pull request required (`required_approving_review_count: 0`),
   force-push and deletion refused, `bypass_actors: []` — resolving owner/repo and default
   branch from `gh`, failing early with a named prerequisite when `gh` is absent or
@@ -23,18 +23,21 @@ protection, review count, bypass list, idempotency by lookup, merge-commit behav
   exactly one ruleset carrying the three rules and an empty bypass list; a direct
   `git push origin <default>` is rejected by the remote; a second run still shows exactly one
   ruleset; invoking it with `gh` logged out exits non-zero naming the prerequisite.
-  _Status:_ script written; `--dry-run` verified (correct `POST`/payload, three rules,
-  `bypass_actors: []`, prerequisite check fires). The remote apply and its read-back /
-  rejected-push confirmation are pending — run `bash scripts/protect-branch.sh` against a
-  real repository, then tick.
+  _Verified:_ run for real against `Zuexx/forgekit-workflow` on 2026-09-16. The ruleset
+  (`protect main`, id `23519936`) is live; a direct `git push origin main` from this clone was
+  rejected with `GH013: Repository rule violations ... Changes must be made through a pull
+  request.`
 - [x] 2.2 Extend `scripts/protect-branch.sh` to also set the repository's allowed PR merge
   methods: `gh repo edit "$repo" --enable-merge-commit --enable-squash-merge=false
   --enable-rebase-merge=false`, printed (not executed) under `--dry-run`, run after the
   ruleset succeeds under a real run, and failing the script with a named error if it fails.
   _Done when:_ `test/protect-branch.test.sh` (new) passes against a stubbed `gh` — `--dry-run`
   output names `owner/repo`, all three ruleset rules, and the `gh repo edit` command with the
-  three merge-method flags; a real run against a scratch GitHub repo is deferred the same way
-  as 2.1's remote apply.
+  three merge-method flags.
+  _Verified:_ run for real against `Zuexx/forgekit-workflow` on 2026-09-16 alongside 2.1.
+  `gh api repos/Zuexx/forgekit-workflow --jq '{allow_merge_commit,allow_squash_merge,
+  allow_rebase_merge}'` read back `{"allow_merge_commit":true,"allow_squash_merge":false,
+  "allow_rebase_merge":false}`.
 
 ## 3. Delivery through the sync
 
