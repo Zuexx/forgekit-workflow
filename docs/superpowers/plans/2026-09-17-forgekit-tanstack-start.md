@@ -263,12 +263,35 @@ pnpm build
 
 Expected: dev server serves the starter page; `pnpm build` exits 0.
 
-- [ ] **Step 4: Add `app` to the root's `nodeSubprojects` verification, confirm preflight**
+- [ ] **Step 4: Confirm (and if missing, add) the `check`/`lint`/`test` scripts**
+
+`--blank`'s own CLI help text says it scaffolds "without default starter UI, Tailwind,
+devtools, or tests" — read literally, this repo may have no test runner wired up at all yet.
+Do not assume `pnpm test` or `pnpm check` work; check first:
+
+```bash
+cat package.json | grep -E '"(check|lint|test)"'
+```
+
+If `check` (a `tsc --noEmit` script) or `test` (a `vitest run` script) is missing, add it, matching
+`forgekit/app/package.json`'s shape (read that file for the exact script strings — same
+`tsc --noEmit` for `check`, same `vitest run` for `test`, `vitest` for `test:watch`) and:
+
+```bash
+pnpm add -D vitest   # only if it wasn't already a dependency
+```
+
+`lint` should already exist from `--toolchain eslint`; confirm it does the same way. Run
+`pnpm check`, `pnpm lint`, and `pnpm test` (even with zero test files, `vitest run` should exit
+0) once all three scripts are confirmed present, before moving on — Tasks 5, 7, and 8 all
+assume these three scripts work.
+
+- [ ] **Step 5: Add `app` to the root's `nodeSubprojects` verification, confirm preflight**
 
 Run: `cd .. && pnpm preflight`
 Expected: no more "missing nodeSubprojects" warning about `app`.
 
-- [ ] **Step 5: Commit via branch and PR**
+- [ ] **Step 6: Commit via branch and PR**
 
 ```bash
 git checkout -b feat/scaffold-tanstack-start
