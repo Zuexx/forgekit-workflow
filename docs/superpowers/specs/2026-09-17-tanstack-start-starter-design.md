@@ -169,13 +169,20 @@ This is new-repo creation, not a migration of existing code. Rollback, if the wh
 is abandoned before it reaches users, is deleting the new repository — nothing else in the
 family depends on its existence.
 
+## Naming
+
+The repository is named **`forgekit-tanstack-start`** — `forgekit-tanstack` was considered and
+rejected: TanStack ships several separate packages (Start, Query, Router, Table), and this repo
+uses more than one of them, so the bare "tanstack" suffix doesn't say which framework the name
+is actually pointing at. `forgekit-tanstack-start` names the frontend framework specifically,
+matching the family's existing convention of a suffix naming the platform/framework
+(`forgekit-ios`, `forgekit-android`).
+
 ## Open Questions
 
-- **Repository name.** `forgekit-tanstack` used as a placeholder throughout this document; not
-  confirmed with the user.
 - **`shadcn-cssinjs`'s maintenance health** (license, source, active upkeep) — flagged as a risk
   above, deferred to an early implementation task rather than blocking this design.
 
-These are genuinely deferrable: neither changes the architecture, the layer boundaries, or the
-task breakdown above — they're answered by naming the repo and by reading one registry's source
-once implementation starts.
+This is genuinely deferrable: it doesn't change the architecture, the layer boundaries, or the
+task breakdown above — it's answered by reading the registry's source once implementation
+starts.
