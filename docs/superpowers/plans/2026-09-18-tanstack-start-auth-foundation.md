@@ -715,8 +715,11 @@ describe('auth.handler() against a real SQLite database', () => {
 
     // Better Auth's own migration path (its Kysely adapter creates tables from the plugin
     // set on first use in dev, but a fresh DB file needs the CLI's migration applied first
-    // in a test context where nothing else has touched this file yet).
-    const { getMigrations } = await import('better-auth/db')
+    // in a test context where nothing else has touched this file yet). getMigrations lives
+    // at the dedicated better-auth/db/migration subpath, not the general better-auth/db one
+    // — confirmed by reading the published package's own exports map before this plan was
+    // dispatched, not assumed.
+    const { getMigrations } = await import('better-auth/db/migration')
     const { runMigrations } = await getMigrations(auth.options)
     await runMigrations()
 
@@ -789,11 +792,13 @@ cd app
 pnpm test auth-integration
 ```
 
-Expected: PASS. If `getMigrations`/`runMigrations` is not the correct current Better Auth CLI
-migration API for `1.7.4`, check the installed package's actual exports
-(`node -e "console.log(Object.keys(require('better-auth/db')))"` from `app/`) and adjust the
-import to match — the test's intent (create the schema in this fresh test database before
-exercising `auth.handler()`) is fixed, the exact API name is not.
+Expected: PASS. `better-auth/db/migration` and `getMigrations`/`runMigrations` were confirmed
+against the actual published `better-auth@1.7.5` package's `dist/db/get-migration.d.mts` and
+its `package.json` exports map before this plan was written — this is a settled fact, not an
+assumption. If `pnpm add`'s resolved `1.7.x` patch genuinely lacks this export (check with
+`node -e "console.log(Object.keys(require('better-auth/db/migration')))"` from `app/`), that
+is a real, reportable regression in Better Auth itself, not a guess to work around silently —
+flag it in the task report rather than switching approaches.
 
 - [ ] **Step 5: Add the test database file to `.gitignore`**
 
