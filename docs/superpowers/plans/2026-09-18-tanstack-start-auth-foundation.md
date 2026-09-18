@@ -905,7 +905,13 @@ Expected: FAIL — `./auth-client` has no exported member `authClient` (module d
 Create `app/src/shared/api/auth-client.ts`:
 
 ```typescript
-import { createAuthClient } from 'better-auth/client'
+// The React-specific entry point, not the vanilla 'better-auth/client'. The vanilla client's
+// useSession is a raw store/atom object, not a callable hook — Task 6's useSyncAuthSession
+// calls authClient.useSession() as a React hook and destructures { data, isPending } from its
+// return value, which only 'better-auth/react''s ReactAuthClient type provides. Confirmed
+// against the actual installed package's dist/client/react/index.d.mts before this plan was
+// corrected — not a guess.
+import { createAuthClient } from 'better-auth/react'
 import { adminClient } from 'better-auth/client/plugins'
 
 const { BETTER_AUTH_URL } = process.env
