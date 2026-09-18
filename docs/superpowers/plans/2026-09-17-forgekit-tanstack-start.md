@@ -231,7 +231,7 @@ git checkout main && git pull --ff-only origin main
 **Interfaces:**
 - Consumes: nothing from Task 1/2.
 - Produces: `app/package.json` with `dev`/`build`/`test`/`lint`/`check` scripts (exact names
-  used by later tasks' verification steps and by `scripts/verify.sh` in Task 8), `app/vite.config.ts`
+  used by later tasks' verification steps and by `scripts/verify.sh` in Task 9), `app/vite.config.ts`
   (edited in Task 4), `app/src/routes/__root.tsx` and `app/src/routes/index.tsx` (edited in
   Task 4 and restructured in Task 6).
 
@@ -768,7 +768,268 @@ git checkout main && git pull --ff-only origin main
 
 ---
 
-### Task 8: Wire `scripts/verify.sh` and CI for this stack
+### Task 8: Wire the Zustand client-state store
+
+**Files:**
+- Create: `app/src/shared/store/index.ts`, `app/src/shared/store/hooks.ts`,
+  `app/src/shared/store/types.ts`, `app/src/shared/store/slices/user.slice.ts`,
+  `app/src/shared/store/slices/ui.slice.ts`
+- Test: `app/src/shared/store/store.test.ts`
+
+**Interfaces:**
+- Produces: `useAppStore` (the raw Zustand store), and selector hooks `useUser`, `useUI`,
+  `useTheme`, `useSidebarOpen`, `useLoading`, `useIsAuthenticated` — every later
+  `features`/`widgets` task that needs client-only state (current user, theme, sidebar) imports
+  from `@/shared/store/hooks`, not `useAppStore` directly.
+
+This mirrors `forgekit/app/lib/store/`'s existing slices pattern structurally (not
+copy-pasted verbatim — paths and the FSD `shared/store/` location differ), per the design
+doc's "Client state: Zustand, mirroring forgekit's slices pattern" decision.
+
+- [ ] **Step 1: Install Zustand and immer**
+
+```bash
+cd app
+pnpm add zustand@^5.0.15 immer@^11.1.18
+```
+
+- [ ] **Step 2: Write the failing test**
+
+Create `app/src/shared/store/store.test.ts`:
+
+```typescript
+import { describe, expect, it } from 'vitest'
+import { useAppStore } from './index'
+
+describe('useAppStore', () => {
+  it('starts with the expected default state', () => {
+    const state = useAppStore.getState()
+    expect(state.user).toBeNull()
+    expect(state.isAuthenticated).toBe(false)
+    expect(state.theme).toBe('light')
+    expect(state.sidebarOpen).toBe(true)
+    expect(state.loading).toBe(false)
+  })
+
+  it('setUser updates user and isAuthenticated together', () => {
+    useAppStore.getState().setUser({ id: '1', name: 'Ada', email: 'ada@example.com' })
+    const state = useAppStore.getState()
+    expect(state.user).toEqual({ id: '1', name: 'Ada', email: 'ada@example.com' })
+    expect(state.isAuthenticated).toBe(true)
+    useAppStore.getState().logout()
+  })
+})
+```
+
+- [ ] **Step 3: Run it to confirm it fails**
+
+Run: `pnpm test store`
+Expected: FAIL — `./index` has no exported member `useAppStore` (module doesn't exist yet).
+
+- [ ] **Step 4: Implement the types helper**
+
+Create `app/src/shared/store/types.ts`:
+
+```typescript
+import { StateCreator } from 'zustand'
+
+export type ImmerStateCreator<T, U = T> = StateCreator<
+  U,
+  [['zustand/immer', never], never],
+  [],
+  T
+>
+```
+
+- [ ] **Step 5: Implement the slices**
+
+Create `app/src/shared/store/slices/user.slice.ts`:
+
+```typescript
+import type { AppStore } from '../index'
+import { ImmerStateCreator } from '../types'
+
+export interface User {
+  id: string
+  name: string
+  email: string
+  avatar?: string
+}
+
+export interface UserSlice {
+  user: User | null
+  isAuthenticated: boolean
+  setUser: (user: User | null) => void
+  updateUser: (updates: Partial<User>) => void
+  logout: () => void
+}
+
+export const createUserSlice: ImmerStateCreator<UserSlice, AppStore> = (set) => ({
+  user: null,
+  isAuthenticated: false,
+
+  setUser: (user) =>
+    set((state) => {
+      state.user = user
+      state.isAuthenticated = !!user
+    }),
+
+  updateUser: (updates) =>
+    set((state) => {
+      if (state.user) {
+        state.user = { ...state.user, ...updates }
+      }
+    }),
+
+  logout: () =>
+    set((state) => {
+      state.user = null
+      state.isAuthenticated = false
+    }),
+})
+```
+
+Create `app/src/shared/store/slices/ui.slice.ts`:
+
+```typescript
+import type { AppStore } from '../index'
+import { ImmerStateCreator } from '../types'
+
+export interface UISlice {
+  theme: 'light' | 'dark'
+  sidebarOpen: boolean
+  loading: boolean
+  setTheme: (theme: 'light' | 'dark') => void
+  toggleSidebar: () => void
+  setSidebarOpen: (open: boolean) => void
+  setLoading: (loading: boolean) => void
+}
+
+export const createUISlice: ImmerStateCreator<UISlice, AppStore> = (set) => ({
+  theme: 'light',
+  sidebarOpen: true,
+  loading: false,
+
+  setTheme: (theme) =>
+    set((state) => {
+      state.theme = theme
+    }),
+
+  toggleSidebar: () =>
+    set((state) => {
+      state.sidebarOpen = !state.sidebarOpen
+    }),
+
+  setSidebarOpen: (open) =>
+    set((state) => {
+      state.sidebarOpen = open
+    }),
+
+  setLoading: (loading) =>
+    set((state) => {
+      state.loading = loading
+    }),
+})
+```
+
+- [ ] **Step 6: Implement the combined store**
+
+Create `app/src/shared/store/index.ts`:
+
+```typescript
+import { create } from 'zustand'
+import { devtools } from 'zustand/middleware'
+import { immer } from 'zustand/middleware/immer'
+
+import { createUISlice, UISlice } from './slices/ui.slice'
+import { createUserSlice, UserSlice } from './slices/user.slice'
+
+export type AppStore = UserSlice & UISlice
+
+export const useAppStore = create<AppStore>()(
+  devtools(
+    immer((...args) => ({
+      ...createUserSlice(...args),
+      ...createUISlice(...args),
+    })),
+    { name: 'AppStore' }
+  )
+)
+
+export * from './slices/ui.slice'
+export * from './slices/user.slice'
+```
+
+- [ ] **Step 7: Run the test again to confirm it passes**
+
+Run: `pnpm test store`
+Expected: PASS (2/2)
+
+- [ ] **Step 8: Add the selector hooks**
+
+Create `app/src/shared/store/hooks.ts`:
+
+```typescript
+import { useAppStore } from './index'
+
+export const useUser = () => useAppStore((state) => ({
+  user: state.user,
+  isAuthenticated: state.isAuthenticated,
+  setUser: state.setUser,
+  updateUser: state.updateUser,
+  logout: state.logout,
+}))
+
+export const useUI = () => useAppStore((state) => ({
+  theme: state.theme,
+  sidebarOpen: state.sidebarOpen,
+  loading: state.loading,
+  setTheme: state.setTheme,
+  toggleSidebar: state.toggleSidebar,
+  setSidebarOpen: state.setSidebarOpen,
+  setLoading: state.setLoading,
+}))
+
+export const useTheme = () => useAppStore((state) => state.theme)
+export const useSidebarOpen = () => useAppStore((state) => state.sidebarOpen)
+export const useLoading = () => useAppStore((state) => state.loading)
+export const useIsAuthenticated = () => useAppStore((state) => state.isAuthenticated)
+```
+
+- [ ] **Step 9: Verify the whole app still builds and lints clean**
+
+```bash
+pnpm check
+pnpm lint
+pnpm lint:fsd
+pnpm build
+```
+
+Expected: all four pass. `pnpm lint:fsd` matters here specifically — `shared/store` is a new
+segment under `shared`, and per Task 5's finding, steiger's `public-api` rule requires an index
+file for every `shared` segment except `ui`/`lib`. `index.ts` already exists as this task's
+main file (Step 6), so this should pass without the empty-placeholder workaround Task 5 needed
+for `shared/api`/`shared/styles` — but confirm it actually does, don't assume.
+
+- [ ] **Step 10: Commit via branch and PR**
+
+```bash
+git checkout -b feat/zustand-store
+git add app
+git commit -m "feat: wire the Zustand client-state store
+
+Mirrors forgekit/app/lib/store/'s slices pattern (devtools + immer
+middleware, per-domain slices combined into one AppStore) under FSD's
+shared/store/, per the design doc's client-state decision."
+git push -u origin feat/zustand-store
+gh pr create --title "feat: wire the Zustand client-state store" --body "Establishes the shared/store client-state layer, mirroring forgekit's existing slices pattern."
+gh pr merge --merge --delete-branch
+git checkout main && git pull --ff-only origin main
+```
+
+---
+
+### Task 9: Wire `scripts/verify.sh` and CI for this stack
 
 **Files:**
 - Create: `scripts/verify.sh`, `.github/workflows/ci.yml`
@@ -880,7 +1141,7 @@ git checkout main && git pull --ff-only origin main
 
 ---
 
-### Task 9: Register the fifth repository in the family's own documentation
+### Task 10: Register the fifth repository in the family's own documentation
 
 **Files:** (in `forgekit-workflow`, not `forgekit-tanstack-start`)
 - Modify: `docs/FAMILY_OVERVIEW.md`, `README.md`
