@@ -24,7 +24,7 @@
 ### Task 1: Database adapters
 
 **Files:**
-- Create: `app/src/shared/api/db/types.ts`, `app/src/shared/api/db/sqlite.ts`, `app/src/shared/api/db/postgres.ts`, `app/src/shared/api/db/mssql.ts`
+- Create: `app/src/shared/api/db/types.ts`, `app/src/shared/api/db/load-root-env.ts`, `app/src/shared/api/db/load-local-env.ts`, `app/src/shared/api/db/sqlite.ts`, `app/src/shared/api/db/postgres.ts`, `app/src/shared/api/db/mssql.ts`
 
 **Interfaces:**
 - Produces: `db` (a `Kysely<DB>` instance) exported from `sqlite.ts` and `mssql.ts`; `db` (a `pg.Pool`) exported from `postgres.ts`; the `DB` type exported from `types.ts`. Task 2's `auth.ts` imports all three `db` exports and the `DB` type.
@@ -124,21 +124,51 @@ export interface DB {
 }
 ```
 
-- [ ] **Step 3: Create the SQLite adapter**
+- [ ] **Step 3: Create the shared env-loader modules**
+
+This repo's ESLint config enforces `import/first` (no statement between import
+declarations) and `node/prefer-node-protocol` (`node:fs`, not `fs`) — forgekit's own
+`lib/db/*.ts`, which the next three steps port, calls `dotenv`'s `config()` between two
+import blocks and uses bare `fs`/`path`. Both fail lint here. Fix: extract the
+config-loading side effect into its own tiny module, imported (not called) as a plain
+first import — a plain import is itself an import declaration, so `import/first` accepts
+any number of them in a row before the file's other imports, with no call in between.
+
+Create `app/src/shared/api/db/load-root-env.ts`:
+
+```typescript
+import { config } from 'dotenv'
+import { resolve } from 'node:path'
+
+// Loads the one setting shared by the .NET API and Better Auth — Database__Provider —
+// from the repo-root .env. A plain side-effecting import (not an inline function call)
+// keeps every consumer's own import block free of the code-between-imports shape
+// eslint's import/first rule rejects.
+config({ path: resolve(process.cwd(), '..', '.env') })
+```
+
+Create `app/src/shared/api/db/load-local-env.ts`:
+
+```typescript
+import { config } from 'dotenv'
+import { resolve } from 'node:path'
+
+// Provider-specific connection details are app-scoped, unlike Database__Provider itself
+// (loaded from the repo-root .env by load-root-env.ts). A fork with a real Postgres/SQL
+// Server deployment sets this in app/.env.local, not the shared root .env.
+config({ path: resolve(process.cwd(), '.env.local') })
+```
+
+- [ ] **Step 4: Create the SQLite adapter**
 
 Create `app/src/shared/api/db/sqlite.ts`:
 
 ```typescript
-import { config } from 'dotenv'
-import { existsSync, mkdirSync } from 'fs'
+import './load-root-env'
+
+import { existsSync, mkdirSync } from 'node:fs'
+import { dirname, resolve as resolvePath } from 'node:path'
 import { Kysely, SqliteDialect } from 'kysely'
-import { dirname, resolve as resolvePath } from 'path'
-
-// Loads the one setting shared by the .NET API and Better Auth — Database__Provider — from
-// the repo-root .env. This file's own path is app/src/shared/api/db/sqlite.ts, five levels
-// below the repo root.
-config({ path: resolvePath(process.cwd(), '..', '.env') })
-
 import BetterSqlite3 from 'better-sqlite3'
 
 import type { DB } from './types'
@@ -172,18 +202,12 @@ const dialect = new SqliteDialect({
 export const db = new Kysely<DB>({ dialect })
 ```
 
-- [ ] **Step 4: Create the Postgres adapter**
+- [ ] **Step 5: Create the Postgres adapter**
 
 Create `app/src/shared/api/db/postgres.ts`:
 
 ```typescript
-import { config } from 'dotenv'
-import { resolve } from 'path'
-
-// Provider-specific connection details are app-scoped, unlike Database__Provider itself
-// (loaded by sqlite.ts from the repo-root .env). A fork with a real Postgres deployment
-// sets this in app/.env.local, not the shared root .env.
-config({ path: resolve(process.cwd(), '.env.local') })
+import './load-local-env'
 
 import { Pool } from 'pg'
 
@@ -194,15 +218,12 @@ export const db = new Pool({
 })
 ```
 
-- [ ] **Step 5: Create the SQL Server adapter**
+- [ ] **Step 6: Create the SQL Server adapter**
 
 Create `app/src/shared/api/db/mssql.ts`:
 
 ```typescript
-import { config } from 'dotenv'
-import { resolve } from 'path'
-
-config({ path: resolve(process.cwd(), '.env.local') })
+import './load-local-env'
 
 import { Kysely, MssqlDialect } from 'kysely'
 import * as tarn from 'tarn'
@@ -253,16 +274,19 @@ const dialect = new MssqlDialect({
 export const db = new Kysely<DB>({ dialect })
 ```
 
-- [ ] **Step 6: Confirm the three adapters import cleanly**
+- [ ] **Step 7: Confirm the adapters import cleanly and pass lint**
 
 ```bash
 cd app
 pnpm exec tsc --noEmit
+pnpm lint
 ```
 
-Expected: no errors referencing `shared/api/db/*`. (Nothing imports these files yet, so `pnpm build`/`pnpm dev` won't exercise them until Task 2 — `tsc --noEmit` alone confirms the types check.)
+Expected: no errors referencing `shared/api/db/*` from either command. (Nothing imports
+these files yet, so `pnpm build`/`pnpm dev` won't exercise them until Task 2 — `tsc --noEmit`
+and `pnpm lint` alone confirm the types check and the code style is clean.)
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
 git add app/package.json app/pnpm-lock.yaml app/pnpm-workspace.yaml app/src/shared/api/db
@@ -407,15 +431,14 @@ export const AUTH_COOKIE = 'forgekit-tanstack-start'
 Create `app/src/shared/api/auth.ts`:
 
 ```typescript
-import { config } from 'dotenv'
-import { resolve } from 'path'
-
-// sqlite.ts also loads this file, and ES module evaluation order means its call runs
-// before this one either way. This call exists so the guarantee does not quietly depend on
-// that: normalizeProvider below reads Database__Provider on the assumption it is already
-// loaded, and that has to hold even if an adapter stops loading it — dotenv's config does
-// not override an already-set variable, so calling it again here is a safe no-op today.
-config({ path: resolve(process.cwd(), '..', '.env') })
+// load-root-env.ts also loads this file, and ES module evaluation order means its call
+// runs before this one either way. This import exists so the guarantee does not quietly
+// depend on that: normalizeProvider below reads Database__Provider on the assumption it is
+// already loaded, and that has to hold even if an adapter stops loading it — dotenv's
+// config does not override an already-set variable, so loading it again here is a safe
+// no-op today. A plain import, not an inline config() call, per Task 1's Step 3 note on
+// why this repo's import/first lint rule needs the side effect isolated this way.
+import './db/load-root-env'
 
 import { betterAuth } from 'better-auth'
 import { tanstackStartCookies } from 'better-auth/tanstack-start'
@@ -684,8 +707,8 @@ request that actually reaches the database catches that class of bug.
 Create `app/src/shared/api/auth-integration.test.ts`:
 
 ```typescript
-import { existsSync, rmSync } from 'fs'
-import { resolve } from 'path'
+import { existsSync, rmSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 
 const TEST_DB_PATH = resolve(
