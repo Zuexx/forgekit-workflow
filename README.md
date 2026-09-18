@@ -90,6 +90,22 @@ pnpm preflight
 
 `pnpm preflight` is the acceptance test. It exits non-zero until the workflow genuinely works.
 
+### If `pnpm install` reports pending build approvals
+
+`pnpm` exits non-zero when a dependency's install script hasn't been approved or declined yet —
+at the repository root, or inside any subproject added later (a scaffolded frontend under
+`app/`, for instance, can introduce its own native dependency needing this the first time it's
+installed). Resolve it with explicit arguments, not the bare command:
+
+```bash
+pnpm approve-builds '<pkg-to-approve>' '!<pkg-to-decline>'   # or --all to approve everything pending
+```
+
+Bare `pnpm approve-builds` launches an interactive prompt. That has no terminal to read from in
+CI or inside a dispatched subagent's sandbox, and hangs. Let the tool write the resulting
+`allowBuilds` block in `pnpm-workspace.yaml` from those explicit arguments — don't hand-edit it;
+the key name pnpm's own error message suggests is not always the one it actually expects.
+
 ## Updating an existing repository
 
 ```bash
