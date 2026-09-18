@@ -1074,11 +1074,13 @@ describe('createAppStore', () => {
 
 describe('useAppStoreContext', () => {
   it('throws when used outside StateProvider', () => {
-    const { result } = renderHook(() =>
-      useAppStoreContext((state) => state.theme),
-    )
-    expect(result.error).toBeInstanceOf(Error)
-    expect(result.error?.message).toContain('StateProvider')
+    // @testing-library/react@16's renderHook has no result.error capture — a synchronous
+    // throw from the render callback propagates straight out of the renderHook() call
+    // itself, so the assertion wraps that call, not a returned result field. Confirmed
+    // against the actual installed package's dist/pure.js before this plan was dispatched.
+    expect(() =>
+      renderHook(() => useAppStoreContext((state) => state.theme)),
+    ).toThrow('StateProvider')
   })
 
   it('resolves the store state when used inside StateProvider', () => {
