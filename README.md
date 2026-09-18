@@ -27,7 +27,7 @@ builds a .NET API, an iOS app, or an Android app.
 Two documents describe the whole arrangement rather than any one repository, which is what
 neither the consumers' `AGENTS.md` files nor this table can do:
 
-- [`docs/FAMILY_OVERVIEW.md`](docs/FAMILY_OVERVIEW.md) — the four repositories as one system:
+- [`docs/FAMILY_OVERVIEW.md`](docs/FAMILY_OVERVIEW.md) — the five repositories as one system:
   what each is for, what flows between them, the stack declaration, the governing rule and the
   defects it caught, and why Godot is not among them.
 - [`docs/WORKFLOW_IN_PRACTICE.md`](docs/WORKFLOW_IN_PRACTICE.md) — how a change actually moves
