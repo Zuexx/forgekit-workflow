@@ -150,7 +150,9 @@ Server state (data fetched from the API) is TanStack Query's job; client-only st
 current user, UI state like theme and sidebar-open) is Zustand's, matching `forgekit`'s own
 split. The slices pattern carries over structurally (`devtools` + `immer` middleware, one
 `AppStore` type combining per-domain slices, selector hooks) but lives under FSD's `shared`
-layer (`shared/store/`) rather than a central `lib/store/` directory, since it's genuinely
+layer (`shared/state/` — renamed from the originally planned `shared/store/` during
+implementation, since `store` is on steiger's hard-coded list of segment names that describe
+contents rather than purpose) rather than a central `lib/store/` directory, since it's genuinely
 cross-cutting infrastructure every layer above `shared` may read from — the same reasoning that
 places the TanStack Query client in `shared/api/`.
 
