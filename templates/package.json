@@ -18,8 +18,8 @@
     "verify": "bash scripts/verify.sh"
   },
   "devDependencies": {
-    "@colbymchenry/codegraph": "^1.5.0",
-    "@fission-ai/openspec": "^1.9.0",
+    "@colbymchenry/codegraph": "^1.6.0",
+    "@fission-ai/openspec": "^1.13.1",
     "grillme": "latest"
   }
 }
