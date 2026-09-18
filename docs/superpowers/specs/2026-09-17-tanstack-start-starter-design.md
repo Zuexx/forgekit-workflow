@@ -96,10 +96,13 @@ Layer responsibilities:
 The user's original ask was "shadcn/ui rewritten on StyleX." Rewriting the ~60-component
 catalog was not undertaken — [`shadcn-cssinjs`](https://www.shadcn-cssinjs.com/) already exists:
 a component registry (Base UI primitives + StyleX, `npx shadcn add <registry>/<name>.json`,
-copy-owned code, not an npm runtime dependency) covering the full shadcn catalog including a
-Data Table component already built on **TanStack Table** — which satisfies the "TanStack Table
-as core" requirement as a side effect of adopting this registry, not a separate integration
-task.
+copy-owned code, not an npm runtime dependency) covering most of the shadcn catalog, including
+Data Table — documented as a guide rather than shipped as an installable registry item (its own
+docs: "instead of a data-table component, ... a guide on how to build your own," on top of the
+registry's `table` primitive plus **TanStack Table** directly). Adopting this registry still
+satisfies the "TanStack Table as core" requirement, just as a real `@tanstack/react-table`
+integration hand-composed from the registry's documented pattern, not an installable component
+pulled in as-is — confirmed during implementation (Task 6 of the implementation plan).
 
 **Consequence, confirmed and accepted with the user:** the primitive layer is Base UI, not
 Radix — a real, deliberate divergence from `forgekit`'s Next.js app (Radix + Tailwind). The two
