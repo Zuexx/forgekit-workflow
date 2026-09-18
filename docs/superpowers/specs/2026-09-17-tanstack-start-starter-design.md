@@ -14,7 +14,11 @@ The goal is a fifth family repository — a `.NET + TanStack Start` starter, par
 Three things came with the request and are folded into this design: strict Feature-Sliced
 Design (FSD) layering for the frontend, StyleX as the styling engine (via `shadcn-cssinjs`, a
 third-party component registry built on Base UI + StyleX, not a from-scratch rewrite), and
-TanStack Query + TanStack Table established as the family's standard web data layer.
+TanStack Query + TanStack Table established as the family's standard web data layer. A fourth
+item surfaced after the plan was already underway: `forgekit`'s Next.js app already has a real
+Zustand store (`app/lib/store/`, slices pattern, `zustand@^5.0.15` + `immer@^11.1.18`) for
+client-only state (current user, UI state like theme/sidebar) — the same retroactive-standard
+situation TanStack Query was in. Folded in below.
 
 ## Goals / Non-goals
 
@@ -78,7 +82,8 @@ maintains.
 
 Layer responsibilities:
 - `shared/`: StyleX tokens (`shadcn-cssinjs`'s `stylex-tokens.json`), the installed
-  `shadcn-cssinjs` components, the TanStack Query client instance, generic utilities.
+  `shadcn-cssinjs` components, the TanStack Query client instance, the Zustand store, generic
+  utilities.
 - `entities/`: domain models mirroring Anvil's (e.g. `entities/todo`, once that module exists).
 - `features/`: user-facing capability slices (e.g. `features/authenticate`, carrying over the
   concept — not the code — from `forgekit`'s existing feature).
@@ -138,6 +143,16 @@ wraps those calls for client-side caching, mirroring the shape (not the code) of
 `lib/queries/hooks/use-api-query.ts` — a config object over `useQuery` with toast-on-error
 built in — relocated into the appropriate FSD `entities`/`features` layer per slice, rather than
 one central `lib/queries` directory.
+
+### Client state: Zustand, mirroring forgekit's slices pattern
+
+Server state (data fetched from the API) is TanStack Query's job; client-only state (the
+current user, UI state like theme and sidebar-open) is Zustand's, matching `forgekit`'s own
+split. The slices pattern carries over structurally (`devtools` + `immer` middleware, one
+`AppStore` type combining per-domain slices, selector hooks) but lives under FSD's `shared`
+layer (`shared/store/`) rather than a central `lib/store/` directory, since it's genuinely
+cross-cutting infrastructure every layer above `shared` may read from — the same reasoning that
+places the TanStack Query client in `shared/api/`.
 
 ### Testing
 
