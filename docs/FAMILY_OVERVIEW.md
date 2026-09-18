@@ -28,7 +28,7 @@ Everything else about it knew nothing of any stack.
 Keeping a copy of that workflow in each starter would have reproduced a failure this project had
 just spent a release removing from its package versions: the same thing written in several
 places, where an update reaches some of them and not the others. So the workflow moved to its own
-repository, and the three starters consume it.
+repository, and the four starters consume it.
 
 ## How the sharing works
 
@@ -100,5 +100,5 @@ planning rule requires the Impact section of a proposal to be grounded in the gr
 in an estimate, and that rule cannot be satisfied where the graph is blind.
 
 A native Godot setup therefore needs that rule replaced with something its ecosystem can actually
-support — which makes it a separate design rather than a fourth starter. Using C# for Godot would
+support — which makes it a separate design rather than a fifth starter. Using C# for Godot would
 avoid the problem, since CodeGraph does index C#.
