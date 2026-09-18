@@ -1,0 +1,25 @@
+version: 2
+
+# The workflow tooling tracks the newest release its version policy permits, and nobody
+# remembers to check. A bump here can change whether openspec/config.yaml still yields its
+# rules, which nothing else would notice — run `pnpm exec openspec validate --all --strict`
+# before merging one.
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: chore(deps)
+    groups:
+      workflow-tooling:
+        patterns:
+          - "*"
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: chore(deps)
