@@ -60,8 +60,29 @@ signed-in user's data.
 - Any locale/i18n work — sub-project 3.
 - The authenticated app shell (sidebar, nav, breadcrumb, team switcher, user menu) — sub-project 4.
 - Real light/dark theme CSS — sub-project 5.
-- A browser-driven end-to-end test of the full flow — sub-project 6.
+- A browser-driven end-to-end test of the full flow — sub-project 6. The final whole-branch
+  review of this sub-project (2026-09-18) found this foundation's two spike-verified pieces —
+  that `/api/auth/$` actually routes through TanStack Start, and that `tanstackStartCookies()`
+  actually writes cookies through Start's mechanism (its `setCookie` call is wrapped in a
+  swallowing `try/catch`, confirmed by reading the published package's source) — have **zero**
+  automated coverage: `auth-integration.test.ts` asserts on Better Auth's own `Set-Cookie`
+  header on the raw `Response`, which stays present even if the cookie plugin is broken,
+  misconfigured, or removed. A Vitest-level test can't easily establish a real Start request
+  context, so this was left unfixed here — but sub-project 6 MUST name these two as explicit
+  requirements ("the mounted path actually routes"; "the cookie plugin actually writes through
+  Start's mechanism"), not leave them implied by "browser e2e test of the full auth flow."
 - Any change to `forgekit` itself — sub-project 7, a separate repo, separate change.
+
+**Design inputs carried forward for sub-project 2** (from the same final review): no server-side
+session read exists yet — `useSyncAuthSession` only writes from a `useEffect`, which never runs
+during SSR, and Better Auth's `useSession()` never resolves server-side either, so the Zustand
+store is always empty during SSR today. The per-request store fix is still correct and becomes
+load-bearing the instant sub-project 2 adds server-side session hydration, but sub-project 2
+should plan for a route-loader-level session read (e.g. `auth.api.getSession()` seeding
+`StateProvider`) from the start, rather than discovering an authenticated-flips-to-unauthenticated
+SSR flash after the fact. Separately, no doc anywhere points a fork at `app/.env.local.example`
+or states that `BETTER_AUTH_SECRET` is mandatory (Better Auth throws on the default secret in
+production) — worth a README/docs step in sub-project 2 or wherever env setup is next documented.
 
 ## Decisions
 
