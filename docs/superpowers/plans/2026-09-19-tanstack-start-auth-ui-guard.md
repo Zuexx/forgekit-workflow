@@ -52,22 +52,28 @@ Query's `useMutation`, shadcn-cssinjs component registry (Input/Field/Card/Label
 ### Task 1: ABAC policy logic
 
 **Files:**
-- Create: `app/src/shared/api/abac/types.ts`, `app/src/shared/api/abac/resolve-context.ts`,
-  `app/src/shared/api/abac/evaluate-policy.ts`, `app/src/shared/api/abac/index.ts`
-- Test: `app/src/shared/api/abac/resolve-context.test.ts`, `app/src/shared/api/abac/evaluate-policy.test.ts`
+- Create: `app/src/shared/api/abac/types.ts`, `app/src/shared/api/abac/build-context.ts`,
+  `app/src/shared/api/abac/resolve-context.ts`, `app/src/shared/api/abac/evaluate-policy.ts`,
+  `app/src/shared/api/abac/index.ts`
+- Test: `app/src/shared/api/abac/build-context.test.ts`, `app/src/shared/api/abac/evaluate-policy.test.ts`
 
 **Interfaces:**
 - Consumes: `AUTH_COOKIE` from `#/shared/lib/constants` (sub-project 1, already exists).
 - Produces: `Subject`, `Resource`, `Environment`, `AbacContext`, `PolicyDecision`, `AbacConfig`
-  types; `resolveContext(path: string, config: AbacConfig): AbacContext`;
-  `evaluatePolicy(ctx: AbacContext): PolicyDecision`. Task 2 imports all of these.
+  types; `resolveContext(path: string, config: AbacConfig): Promise<AbacContext>`;
+  `evaluatePolicy(ctx: AbacContext): PolicyDecision`. Task 2 imports all of these — note
+  `resolveContext` is async (see Step 6 for why) and Task 2's `beforeLoad` must `await` it.
 
-This is pure, framework-adjacent logic — the only TanStack Start dependency is `getCookie`/
-`getRequest` from `@tanstack/react-start/server`, both already verified working in this repo (
-`getCookie` and `getRequest().method` were confirmed against a real dev server before this plan
-was written: a request carrying `Cookie: spike-test-cookie=hello-world` correctly reported
-`cookieVal=hello-world` via `getCookie`, and a `POST` request correctly reported `method=POST` via
-`getRequest().method` — there is no `getRequestMethod` export, only `getRequest().method`).
+This is pure, framework-adjacent logic split into two files — see Step 6 for why: `getCookie`/
+`getRequest` from `@tanstack/react-start/server` are server-only APIs that a `createServerFn`
+must bridge, since `__root.tsx` (which will call `resolveContext` from `beforeLoad`) is
+unavoidably part of the client bundle. `getCookie`/`getRequest().method` themselves were verified
+against a real dev server before this plan was written (a request carrying `Cookie:
+spike-test-cookie=hello-world` correctly reported `cookieVal=hello-world` via `getCookie`, and a
+`POST` request correctly reported `method=POST` via `getRequest().method` — there is no
+`getRequestMethod` export, only `getRequest().method`); the `createServerFn` requirement itself
+was verified separately, against a real `pnpm build`, after an initial attempt to call these APIs
+from a plain (non-`createServerFn`) file failed the production build outright.
 
 - [ ] **Step 1: Create the ABAC types**
 
@@ -235,82 +241,72 @@ pnpm test evaluate-policy
 
 Expected: PASS (all 7 cases).
 
-- [ ] **Step 6: Write the failing test for `resolveContext`**
+- [ ] **Step 6: Write the failing test for `buildContext`**
 
-Create `app/src/shared/api/abac/resolve-context.test.ts`:
+`resolveContext` (the public interface) has to run inside TanStack Start's real request
+runtime — it must be a `createServerFn`, because `getCookie`/`getRequest` are server-only APIs
+and `__root.tsx` (which calls this from `beforeLoad`) is unavoidably part of the client bundle
+for hydration. Confirmed against a real `pnpm build` before this plan was corrected: a plain
+(non-`createServerFn`) import of `@tanstack/react-start/server` from any file reachable by the
+client bundle fails the build outright with `[import-protection] Import denied in client
+environment`; wrapping it in `createServerFn` is the officially-suggested fix, and the built
+output then places the real handler only in `dist/server/`, never `dist/client/` — confirmed by
+inspecting the build output directly. A `createServerFn`-wrapped function can only be invoked
+inside the real Start runtime (it throws `No Start context found in AsyncLocalStorage` outside
+one), so it can't be unit-tested by calling it directly in Vitest.
+
+The fix: split the pure decision logic (`buildContext` — no server-only imports, directly
+testable with plain values) from the thin `createServerFn` wrapper (`resolveContext` —
+untested directly, matching the same accepted pattern Task 2 and Task 9 already use for
+`beforeLoad` wiring that a Vitest test can't reach).
+
+Create `app/src/shared/api/abac/build-context.test.ts`:
 
 ```typescript
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
 
-import { AUTH_COOKIE } from '#/shared/lib/constants'
-
-const cookieJar = new Map<string, string>()
-let requestMethod = 'GET'
-
-vi.mock('@tanstack/react-start/server', () => ({
-  getCookie: (name: string) => cookieJar.get(name),
-  getRequest: () => ({ method: requestMethod }),
-}))
-
-const { resolveContext } = await import('./resolve-context')
+import { buildContext } from './build-context'
 
 const config = {
   publicRoutes: ['/'],
   authRoutes: ['/sign-in', '/sign-up'],
 }
 
-describe('resolveContext', () => {
-  beforeEach(() => {
-    cookieJar.clear()
-    requestMethod = 'GET'
-  })
-
-  it('reads the session cookie named after AUTH_COOKIE', () => {
-    cookieJar.set(`${AUTH_COOKIE}.session_token`, 'a-token')
-
-    const ctx = resolveContext('/dashboard', config)
+describe('buildContext', () => {
+  it('treats a present session as authenticated', () => {
+    const ctx = buildContext('/dashboard', config, 'a-token', 'GET')
 
     expect(ctx.subject.isAuthenticated).toBe(true)
   })
 
-  it('reads the __Secure- prefixed cookie set over HTTPS', () => {
-    cookieJar.set(`__Secure-${AUTH_COOKIE}.session_token`, 'a-token')
-
-    const ctx = resolveContext('/dashboard', config)
-
-    expect(ctx.subject.isAuthenticated).toBe(true)
-  })
-
-  it('treats a missing cookie as anonymous', () => {
-    const ctx = resolveContext('/dashboard', config)
+  it('treats a missing session as anonymous', () => {
+    const ctx = buildContext('/dashboard', config, undefined, 'GET')
 
     expect(ctx.subject.isAuthenticated).toBe(false)
   })
 
   it('marks a configured public route', () => {
-    const ctx = resolveContext('/', config)
+    const ctx = buildContext('/', config, undefined, 'GET')
 
     expect(ctx.resource.isPublic).toBe(true)
     expect(ctx.resource.isAuthRoute).toBe(false)
   })
 
   it('marks a configured auth route', () => {
-    const ctx = resolveContext('/sign-in', config)
+    const ctx = buildContext('/sign-in', config, undefined, 'GET')
 
     expect(ctx.resource.isAuthRoute).toBe(true)
   })
 
   it('treats an unlisted route as neither public nor an auth route', () => {
-    const ctx = resolveContext('/dashboard', config)
+    const ctx = buildContext('/dashboard', config, undefined, 'GET')
 
     expect(ctx.resource.isPublic).toBe(false)
     expect(ctx.resource.isAuthRoute).toBe(false)
   })
 
   it('carries the request method through', () => {
-    requestMethod = 'POST'
-
-    const ctx = resolveContext('/', config)
+    const ctx = buildContext('/', config, undefined, 'POST')
 
     expect(ctx.environment.method).toBe('POST')
   })
@@ -321,27 +317,30 @@ describe('resolveContext', () => {
 
 ```bash
 cd app
-pnpm test resolve-context
+pnpm test build-context
 ```
 
-Expected: FAIL — `./resolve-context` doesn't exist yet.
+Expected: FAIL — `./build-context` doesn't exist yet.
 
-- [ ] **Step 8: Implement `resolveContext`**
+- [ ] **Step 8: Implement `buildContext` and the `resolveContext` wrapper**
 
-Create `app/src/shared/api/abac/resolve-context.ts`:
+Create `app/src/shared/api/abac/build-context.ts`:
 
 ```typescript
-import { getCookie, getRequest } from '@tanstack/react-start/server'
-
-import { AUTH_COOKIE } from '#/shared/lib/constants'
-
 import type { AbacConfig, AbacContext } from './types'
 
-export function resolveContext(path: string, config: AbacConfig): AbacContext {
-  const session =
-    getCookie(`${AUTH_COOKIE}.session_token`) ??
-    getCookie(`__Secure-${AUTH_COOKIE}.session_token`)
-
+/**
+ * The pure half of context resolution: no server-only imports, so it's directly
+ * unit-testable with plain values. resolve-context.ts (a createServerFn wrapper — it
+ * can only run inside TanStack Start's real request runtime, not a plain Vitest call)
+ * reads the actual cookie/request-method values and passes them in here.
+ */
+export function buildContext(
+  path: string,
+  config: AbacConfig,
+  session: string | undefined,
+  method: string,
+): AbacContext {
   return {
     subject: { isAuthenticated: Boolean(session) },
     resource: {
@@ -349,19 +348,58 @@ export function resolveContext(path: string, config: AbacConfig): AbacContext {
       isPublic: config.publicRoutes.includes(path),
       isAuthRoute: config.authRoutes.includes(path),
     },
-    environment: { method: getRequest().method },
+    environment: { method },
   }
 }
 ```
 
-- [ ] **Step 9: Run the tests again to confirm they pass**
+Create `app/src/shared/api/abac/resolve-context.ts`:
+
+```typescript
+import { createServerFn } from '@tanstack/react-start'
+import { getCookie, getRequest } from '@tanstack/react-start/server'
+
+import { AUTH_COOKIE } from '#/shared/lib/constants'
+
+import { buildContext } from './build-context'
+import type { AbacConfig, AbacContext } from './types'
+
+/**
+ * getCookie/getRequest are server-only APIs (TanStack Start's import-protection plugin
+ * rejects a plain import of '@tanstack/react-start/server' from any file reachable by the
+ * client bundle, confirmed against a real `pnpm build` before this was written — __root.tsx's
+ * beforeLoad calls this, and __root.tsx is unavoidably part of the client bundle for
+ * hydration). createServerFn is the officially-supported bridge: the client gets an
+ * auto-generated RPC-calling stub, the server gets the real handler — confirmed by inspecting
+ * the built output, where this file's code appears only in dist/server/, never dist/client/.
+ */
+const resolveContextFn = createServerFn({ method: 'GET' })
+  .validator((data: { path: string; config: AbacConfig }) => data)
+  .handler(({ data }): AbacContext => {
+    const session =
+      getCookie(`${AUTH_COOKIE}.session_token`) ??
+      getCookie(`__Secure-${AUTH_COOKIE}.session_token`)
+
+    return buildContext(data.path, data.config, session, getRequest().method)
+  })
+
+export function resolveContext(
+  path: string,
+  config: AbacConfig,
+): Promise<AbacContext> {
+  return resolveContextFn({ data: { path, config } })
+}
+```
+
+- [ ] **Step 9: Run the test again to confirm it passes**
 
 ```bash
 cd app
-pnpm test resolve-context evaluate-policy
+pnpm test build-context evaluate-policy
 ```
 
-Expected: PASS (all 14 cases across both files).
+Expected: PASS (all 13 cases across both files — 6 for `buildContext`, 7 for `evaluatePolicy`).
+`resolve-context.ts` has no test of its own — see Step 6's explanation.
 
 - [ ] **Step 10: Add the barrel export**
 
@@ -380,6 +418,9 @@ export type {
   Subject,
 } from './types'
 ```
+
+Note: `resolveContext` now returns `Promise<AbacContext>`, not `AbacContext` — Task 2's
+`beforeLoad` must `await` it (Task 2's own text already reflects this).
 
 - [ ] **Step 11: Run lint and the FSD check**
 
@@ -400,9 +441,12 @@ git checkout -b feat/abac-policy
 git add app/src/shared/api/abac
 git commit -m "feat: add the ABAC route-guard policy logic
 
-evaluatePolicy/resolveContext, ported from forgekit's proxies/ minus the
-locale-rewriting and role-based pieces that don't apply here yet. Pure
-logic only — nothing wires this into a route in this task."
+evaluatePolicy/buildContext, ported from forgekit's proxies/ minus the
+locale-rewriting and role-based pieces that don't apply here yet.
+resolveContext wraps buildContext in a createServerFn, since getCookie/
+getRequest are server-only APIs that __root.tsx (client-bundled) can't
+import directly — confirmed against a real pnpm build. Nothing wires
+this into a route in this task."
 git push -u origin feat/abac-policy
 gh pr create --title "feat: add the ABAC route-guard policy logic" --body "Pure evaluatePolicy/resolveContext logic, ported from forgekit's proxies/. Wiring into __root.tsx is Task 2."
 gh pr merge --merge --delete-branch
@@ -496,9 +540,9 @@ import { RootDocument } from '#/app/root-document'
 import appCss from '../styles.css?url'
 
 export const Route = createRootRoute({
-  beforeLoad: ({ location }) => {
+  beforeLoad: async ({ location }) => {
     const decision = evaluatePolicy(
-      resolveContext(location.pathname, ABAC_CONFIG),
+      await resolveContext(location.pathname, ABAC_CONFIG),
     )
     if (decision.effect === 'redirect' && decision.to) {
       throw redirect({ to: decision.to })
