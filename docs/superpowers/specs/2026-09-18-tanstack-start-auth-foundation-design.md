@@ -71,6 +71,11 @@ signed-in user's data.
   context, so this was left unfixed here — but sub-project 6 MUST name these two as explicit
   requirements ("the mounted path actually routes"; "the cookie plugin actually writes through
   Start's mechanism"), not leave them implied by "browser e2e test of the full auth flow."
+  Sub-project 2's spec (`2026-09-19-tanstack-start-auth-ui-guard-design.md`) adds a third,
+  same-class requirement discovered while designing its route guard: **the ABAC guard actually
+  redirects at the router level**, not just in its unit-tested `evaluatePolicy`/`resolveContext`
+  pieces — a Vitest-level test can't establish a real router-match context any more than it could
+  for this sub-project's route mounting.
 - Any change to `forgekit` itself — sub-project 7, a separate repo, separate change.
 
 **Design inputs carried forward for sub-project 2** (from the same final review): no server-side
