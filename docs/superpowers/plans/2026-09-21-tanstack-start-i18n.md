@@ -1057,6 +1057,147 @@ git commit -m "feat: wire locale resolution into __root.tsx and mount the i18nex
 
 ---
 
+### Task 3.5: Make locale-prefixed paths actually match a route
+
+**Added mid-implementation, not in the original plan.** Task 3 wired locale *resolution* into
+`beforeLoad` (which locale to use, and stripping the prefix before handing the path to the ABAC
+check), but never made TanStack Router's own route tree aware that `/zh-TW/dashboard` and
+`/dashboard` should render the same page. Confirmed directly against a real dev server before
+writing this task: `GET /zh-TW` → 404 (no route matches); `GET /zh-TW/dashboard` unauthenticated
+→ 307 to `/zh-TW/sign-in` only because the ABAC redirect fires from `__root__`'s `beforeLoad`
+*before* leaf-route matching is ever attempted — this accident masked the gap in that one specific
+case. Any locale-prefixed visit the ABAC layer doesn't redirect away (an authenticated user
+visiting `/zh-TW/dashboard`, or anyone visiting the public `/zh-TW/`) 404s instead of rendering.
+forgekit's own routing has a literal `app/[locale]/...` dynamic segment in its file structure —
+this plan ported locale *resolution* but never re-created the equivalent structural piece in
+TanStack Router's file-based routing.
+
+**Files:**
+- Move: `app/src/routes/index.tsx`, `app/src/routes/dashboard.tsx`, `app/src/routes/sign-in.tsx`,
+  `app/src/routes/sign-up.tsx` — exact destination determined by Step 1 below.
+- Modify: `app/src/routeTree.gen.ts` (regenerated, not hand-edited).
+
+**Interfaces:**
+- Consumes: nothing new — the four moved routes' own `beforeLoad`/`component` logic is untouched,
+  only their file location (and each file's own `createFileRoute(...)` path argument, if the
+  framework's convention requires it to match) changes.
+- Produces: every existing route becomes reachable both unprefixed and under any of the three
+  supported locale prefixes — Tasks 5/7's `LocaleSwitcher`/manual dev-server verification steps
+  depend on this working, since they navigate to and curl locale-prefixed URLs expecting a real
+  page, not a 404.
+
+This task is scoped differently from the rest of this plan: the exact file/folder naming
+convention TanStack Start's file-based router expects for an optional path segment isn't yet
+confirmed against this specific installed version — only that the underlying mechanism exists
+(`@tanstack/router-core@1.171.30`'s own type definitions document optional dynamic segments via
+`{-$param}` syntax). Investigate the exact convention directly against this repo's installed
+packages and this app's existing routing setup (check `app/src/router.tsx`,
+`app/src/routeTree.gen.ts`'s current generated shape, and any TanStack Start/Router documentation
+bundled in `node_modules` or available via the framework's own type definitions/JSDoc) before
+moving any file — do not guess at a folder name and hope the codegen accepts it.
+
+- [ ] **Step 1: Determine the exact optional-segment file convention**
+
+Read this app's `app/src/router.tsx` and current `app/src/routeTree.gen.ts` to understand how
+routes are currently generated. Check `app/package.json`'s `generate-routes` script
+(`tsr generate`) and whether a Vite plugin also auto-generates routes at dev/build time (check
+`app/vite.config.ts` for a `@tanstack/router-plugin`/`tanstackStart` plugin entry). Determine the
+literal folder/file naming pattern this version expects for an optional dynamic segment (likely a
+folder literally named `{-$locale}` under `routes/`, but confirm — do not assume without checking
+the plugin's own source or a working example, since a wrong guess here fails silently at the
+codegen step, not at compile time).
+
+- [ ] **Step 2: Move the four routes under the optional segment**
+
+Move `index.tsx`, `dashboard.tsx`, `sign-in.tsx`, `sign-up.tsx` into the location Step 1
+determined. Update each file's own `createFileRoute('...')` path argument if the convention
+requires it to match the new location exactly (check whether the framework auto-derives this or
+requires manual updating — some TanStack Router setups auto-fix this via their Vite
+plugin/codegen, others require the string literal to match by hand). Leave every route's own
+`beforeLoad`/`component` body completely untouched — this task only changes *where* these routes
+live and what paths route to them, never their logic.
+
+- [ ] **Step 3: Regenerate the route tree**
+
+```bash
+cd app
+pnpm generate-routes
+```
+
+If this app also auto-regenerates via a Vite plugin during `pnpm dev`/`pnpm build`, the manual
+command may be redundant but should still run cleanly and produce the same result — run it anyway,
+to catch any discrepancy between the manual codegen path and the dev-server's own regeneration.
+
+- [ ] **Step 4: Run the full check suite**
+
+```bash
+cd app
+pnpm check
+pnpm lint
+pnpm lint:fsd
+pnpm test
+pnpm build
+```
+
+Expected: all pass/succeed. `pnpm test` should show the same 74/74 as before this task — nothing
+here should need a new or modified test file, since no route's own logic changed, only its
+location in the tree.
+
+- [ ] **Step 5: Verify against a real dev server — this is the actual gate, not Step 4**
+
+```bash
+cd app
+pnpm dev &
+sleep 5
+
+# Public root, unprefixed and prefixed — both must render the real page, not 404
+curl -s -o /dev/null -w "unprefixed root: %{http_code}\n" http://localhost:3000/
+curl -s -o /dev/null -w "zh-TW root: %{http_code}\n" http://localhost:3000/zh-TW
+
+# Unauthenticated dashboard, unprefixed and prefixed — both must redirect to sign-in,
+# in the SAME locale
+curl -s -i http://localhost:3000/dashboard | grep -i "^location\|^HTTP"
+curl -s -i http://localhost:3000/ko-KR/dashboard | grep -i "^location\|^HTTP"
+
+# Sign up a real user, then visit the AUTHENTICATED dashboard under a locale prefix —
+# this is the specific case Task 3's own manual check never exercised, and the one that
+# actually proves this task's fix (an authenticated visit has no redirect to hide behind;
+# the router must genuinely match the locale-prefixed path)
+curl -s -i -X POST http://localhost:3000/api/auth/sign-up/email \
+  -H "Content-Type: application/json" \
+  -d '{"email":"locale-route-verify@example.com","password":"locale-route-verify-pw","name":"Locale Route Verify"}' \
+  > /tmp/locale-route-verify-signup.txt
+COOKIE=$(grep -o 'forgekit-tanstack-start.session_token=[^;]*' /tmp/locale-route-verify-signup.txt)
+curl -s http://localhost:3000/zh-TW/dashboard -H "Cookie: $COOKIE" | grep -o "Welcome"
+
+rm -f /tmp/locale-route-verify-signup.txt
+kill %1
+```
+
+Expected: both root checks return 200; both dashboard redirects carry their own locale prefix
+(`location: /sign-in` and `location: /ko-KR/sign-in` respectively); the authenticated,
+locale-prefixed dashboard visit's response body contains `Welcome` — proving a real page renders
+under a locale prefix with no redirect to hide behind. If any of these fail, the chosen file
+convention from Step 1 was wrong — go back and find the correct one; do not report done against a
+failing verification.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add -A
+git commit -m "fix: make locale-prefixed paths match a real route
+
+Task 3 wired locale resolution into beforeLoad but never made
+TanStack Router's own route tree aware of locale-prefixed paths as
+real, matchable routes -- only unprefixed paths rendered; a
+locale-prefixed visit that the ABAC layer didn't redirect away (an
+authenticated user, or any public page) 404d. Restructures the
+existing index/dashboard/sign-in/sign-up routes under an optional
+path segment so both forms resolve to the same page."
+```
+
+---
+
 ### Task 4: `RadialMenu` — generic shared UI primitive
 
 **Files:**
