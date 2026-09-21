@@ -2065,6 +2065,387 @@ git commit -m "feat: wire translated validation and LocaleSwitcher into sign-in/
 
 ---
 
+### Task 7.5: Translate the rest of the visible UI — titles, labels, buttons, toasts
+
+**Added mid-implementation, not in the original plan.** Task 7 only wired the `validation`
+namespace into the schema resolvers. Confirmed by re-reading Task 7's own plan text: nothing in
+this plan ever consumes the `auth`, `form`, `common`, or `toast` namespaces Task 1 ported — every
+visible piece of UI text (card titles, field labels, button text) and every toast notification
+stays hardcoded English regardless of locale. Raised directly with the human partner mid-execution
+(a genuine scope question, not a bug with one obvious answer) — decided: fix now, since a user
+switching locale and still seeing 100% English UI text does not deliver what "i18n" implies, even
+though the spec's literal Goals bullet only promised translated validation messages.
+
+**Files:**
+- Modify: `app/src/shared/i18n/locales/{en,zh-TW,ko-KR}/auth.json` — add two new keys not present
+  in forgekit's original catalog (forgekit's own card/page structure differs from this repo's
+  Card-based one, so no exact equivalent key exists to reuse).
+- Modify: `app/src/features/auth/ui/sign-in-form.tsx`, `sign-up-form.tsx`.
+- Modify: `app/src/features/auth/model/use-sign-in.ts`, `use-sign-up.ts`, `use-sign-out.ts`,
+  `use-social-sign-in.ts`.
+- Modify: `app/src/features/auth/ui/sign-in-form.test.tsx` (one assertion changes; confirmed by
+  re-reading every other existing test assertion in both form test files and all three hook test
+  files against the exact new translated strings — no other test file needs a change: the
+  hook tests only assert `toHaveBeenCalled()` for success, or a mocked real API error message for
+  failure, which takes precedence over the fallback text this task changes).
+
+**Interfaces:** consumes nothing new; produces nothing later in this plan consumes.
+
+- [ ] **Step 1: Add the two missing title keys to `auth.json`**
+
+Add to `app/src/shared/i18n/locales/en/auth.json`'s existing `signIn`/`signUp` objects (add
+`"title"` as a new key alongside the existing keys in each, don't remove or reorder anything else):
+
+```json
+    "signIn": {
+        "title": "Sign in",
+        "subtitle": "Your Application",
+```
+
+```json
+    "signUp": {
+        "title": "Create an account",
+        "subtitle": "Your Application",
+```
+
+Add to `app/src/shared/i18n/locales/zh-TW/auth.json`:
+
+```json
+    "signIn": {
+        "title": "登入",
+        "subtitle": "您的應用程式",
+```
+
+```json
+    "signUp": {
+        "title": "建立帳號",
+        "subtitle": "您的應用程式",
+```
+
+Add to `app/src/shared/i18n/locales/ko-KR/auth.json`:
+
+```json
+    "signIn": {
+        "title": "로그인",
+        "subtitle": "귀하의 애플리케이션",
+```
+
+```json
+    "signUp": {
+        "title": "계정 생성",
+        "subtitle": "귀하의 애플리케이션",
+```
+
+- [ ] **Step 2: Wire `auth`/`form` into `sign-in-form.tsx`**
+
+Add two more `useTranslation` calls alongside the existing `validation` one, and replace every
+hardcoded English string in the JSX with a translated lookup:
+
+```tsx
+  const { t } = useTranslation('validation')
+  const { t: tAuth } = useTranslation('auth')
+  const { t: tForm } = useTranslation('form')
+```
+
+```tsx
+      <CardHeader>
+        <CardTitle>{tAuth('signIn.title')}</CardTitle>
+        <LocaleSwitcher />
+      </CardHeader>
+      <CardContent>
+        <form noValidate onSubmit={form.handleSubmit(onSubmit)}>
+          <FieldGroup>
+            <Field>
+              <Button type="button" variant="outline" onClick={socialSignIn.signIn}>
+                {tAuth('signIn.loginWithSSO')}
+              </Button>
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="email">{tForm('email.label')}</FieldLabel>
+              <Input id="email" type="email" {...form.register('email')} />
+              {form.formState.errors.email && (
+                <FieldDescription role="alert">
+                  {form.formState.errors.email.message}
+                </FieldDescription>
+              )}
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="password">{tForm('password.label')}</FieldLabel>
+              <Input id="password" type="password" {...form.register('password')} />
+              {form.formState.errors.password && (
+                <FieldDescription role="alert">
+                  {form.formState.errors.password.message}
+                </FieldDescription>
+              )}
+            </Field>
+            <Field>
+              <Button type="submit">{tAuth('signIn.loginButton')}</Button>
+            </Field>
+          </FieldGroup>
+        </form>
+      </CardContent>
+```
+
+(The social-sign-in button's copy changes from "Sign in with Microsoft" to the translated
+`signIn.loginWithSSO` — "Login with SSO" in English — matching forgekit's own generic wording
+exactly rather than naming the specific provider; a deliberate, minor copy change, not a bug.)
+
+- [ ] **Step 3: Wire `auth`/`form` into `sign-up-form.tsx`**
+
+```tsx
+  const { t } = useTranslation('validation')
+  const { t: tAuth } = useTranslation('auth')
+  const { t: tForm } = useTranslation('form')
+```
+
+```tsx
+      <CardHeader>
+        <CardTitle>{tAuth('signUp.title')}</CardTitle>
+        <LocaleSwitcher />
+      </CardHeader>
+      <CardContent>
+        <form noValidate onSubmit={form.handleSubmit(onSubmit)}>
+          <FieldGroup>
+            <Field>
+              <FieldLabel htmlFor="name">{tForm('fullName.label')}</FieldLabel>
+              <Input id="name" type="text" {...form.register('name')} />
+              {form.formState.errors.name && (
+                <FieldDescription role="alert">
+                  {form.formState.errors.name.message}
+                </FieldDescription>
+              )}
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="email">{tForm('email.label')}</FieldLabel>
+              <Input id="email" type="email" {...form.register('email')} />
+              {form.formState.errors.email && (
+                <FieldDescription role="alert">
+                  {form.formState.errors.email.message}
+                </FieldDescription>
+              )}
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="password">{tForm('signUp.password.label')}</FieldLabel>
+              <Input id="password" type="password" {...form.register('password')} />
+              {form.formState.errors.password && (
+                <FieldDescription role="alert">
+                  {form.formState.errors.password.message}
+                </FieldDescription>
+              )}
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="confirmPassword">
+                {tForm('signUp.confirmPassword.label')}
+              </FieldLabel>
+              <Input
+                id="confirmPassword"
+                type="password"
+                {...form.register('confirmPassword')}
+              />
+              {form.formState.errors.confirmPassword && (
+                <FieldDescription role="alert">
+                  {form.formState.errors.confirmPassword.message}
+                </FieldDescription>
+              )}
+            </Field>
+            <Field>
+              <Button type="submit">{tAuth('signUp.createAccountButton')}</Button>
+            </Field>
+          </FieldGroup>
+        </form>
+      </CardContent>
+```
+
+- [ ] **Step 4: Wire `toast` into the four mutation hooks**
+
+Modify `app/src/features/auth/model/use-sign-in.ts` — add the `toast` namespace and replace every
+hardcoded English toast string:
+
+```typescript
+import { useMutation } from '@tanstack/react-query'
+import { useRouter } from '@tanstack/react-router'
+import toast from 'react-hot-toast'
+import { useTranslation } from 'react-i18next'
+
+import { authClient } from '#/shared/api'
+
+import type { SignInInput } from './sign-in-schema'
+
+export function useSignIn() {
+  const router = useRouter()
+  const { t } = useTranslation('toast')
+
+  return useMutation({
+    mutationFn: (input: SignInInput) => authClient.signIn.email(input),
+    onSuccess: (result) => {
+      if (result.error) {
+        toast.error(result.error.message ?? t('error.signIn'))
+        return
+      }
+      toast.success(t('success.signIn'))
+      router.navigate({ to: '/{-$locale}/dashboard' })
+    },
+    onError: () => toast.error(t('error.signIn')),
+  })
+}
+```
+
+Modify `app/src/features/auth/model/use-sign-up.ts` — same pattern:
+
+```typescript
+import { useMutation } from '@tanstack/react-query'
+import { useRouter } from '@tanstack/react-router'
+import toast from 'react-hot-toast'
+import { useTranslation } from 'react-i18next'
+
+import { authClient } from '#/shared/api'
+
+import type { SignUpInput } from './sign-up-schema'
+
+export function useSignUp() {
+  const router = useRouter()
+  const { t } = useTranslation('toast')
+
+  return useMutation({
+    mutationFn: (input: SignUpInput) => authClient.signUp.email(input),
+    onSuccess: (result) => {
+      if (result.error) {
+        toast.error(result.error.message ?? t('error.signUp'))
+        return
+      }
+      toast.success(t('success.signUp'))
+      router.navigate({ to: '/{-$locale}/dashboard' })
+    },
+    onError: () => toast.error(t('error.signUp')),
+  })
+}
+```
+
+Modify `app/src/features/auth/model/use-sign-out.ts`:
+
+```typescript
+import { useMutation } from '@tanstack/react-query'
+import { useRouter } from '@tanstack/react-router'
+import toast from 'react-hot-toast'
+import { useTranslation } from 'react-i18next'
+
+import { authClient } from '#/shared/api'
+
+export function useSignOut() {
+  const router = useRouter()
+  const { t } = useTranslation('toast')
+
+  return useMutation({
+    mutationFn: () => authClient.signOut(),
+    onSuccess: (result) => {
+      if (result.error) {
+        toast.error(t('error.signOut'))
+        return
+      }
+      toast.success(t('success.signOut'))
+      router.navigate({ to: '/{-$locale}' })
+    },
+    onError: () => toast.error(t('error.signOut')),
+  })
+}
+```
+
+Modify `app/src/features/auth/model/use-social-sign-in.ts`:
+
+```typescript
+import toast from 'react-hot-toast'
+import { useTranslation } from 'react-i18next'
+
+import { authClient } from '#/shared/api'
+
+/**
+ * Better Auth's client manages the OAuth redirect itself — simpler than forgekit's manual
+ * window.location.href to a Hono-wrapped endpoint, which this repo's architecture doesn't
+ * have (sub-project 1 decided against a BFF layer).
+ */
+export function useSocialSignIn() {
+  const { t } = useTranslation('toast')
+
+  return {
+    signIn: async () => {
+      const result = await authClient.signIn.social({ provider: 'microsoft' })
+      if (result.error) {
+        toast.error(result.error.message ?? t('error.signIn'))
+      }
+    },
+  }
+}
+```
+
+- [ ] **Step 5: Update the one test assertion that assumed the old hardcoded button text**
+
+`sign-in-form.test.tsx`'s submit button text changes from "Sign in" to the translated
+`signIn.loginButton` — "Login" in English. Update both occurrences of
+`screen.getByRole('button', { name: /^sign in$/i })` to:
+
+```typescript
+    await userEvent.click(screen.getByRole('button', { name: /^login$/i }))
+```
+
+No other assertion in either form test file or any of the three hook test files needs to change —
+confirmed by reading each one against the exact new translated strings before writing this task:
+`sign-up-form.test.tsx`'s `/create account/i`, `/name/i`, `/^password/i`, `/confirm password/i`
+all still match the new translated text case-insensitively (`"Create Account"`, `"Full Name"`,
+`"Password"`, `"Confirm Password"`); the hook tests only assert `toHaveBeenCalled()` for success
+(no argument check) or a mocked real API error message for failure (which takes precedence over
+the fallback text this task changes, so the fallback's new translated value is never what those
+specific tests observe).
+
+- [ ] **Step 6: Run the full check suite**
+
+```bash
+cd app
+pnpm check
+pnpm lint
+pnpm lint:fsd
+pnpm test
+pnpm build
+```
+
+Expected: all pass/succeed, same test count as before this task (no test added or removed, one
+assertion changed).
+
+- [ ] **Step 7: Manually verify against a real dev server**
+
+```bash
+cd app
+pnpm dev &
+sleep 5
+
+curl -s http://localhost:3000/sign-in | grep -a -o "Login"        # English submit button
+curl -s http://localhost:3000/zh-TW/sign-in | grep -a -o "登入"    # zh-TW title AND submit button both use this key's translation
+curl -s http://localhost:3000/ko-KR/sign-up | grep -a -o "계정 생성" # ko-KR title and submit button
+
+kill %1
+```
+
+Expected: all three greps find a match (use `grep -a` — a local BSD-grep binary-sniffing quirk
+already seen twice in this plan's own execution otherwise produces a false negative on curl's raw
+HTTP output). This confirms the actual visible page text — not just the validation-error path —
+now renders in the requested locale, closing the gap this task exists to fix.
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add app/src/shared/i18n/locales app/src/features/auth
+git commit -m "feat: translate remaining UI text and toast messages
+
+Task 7 only wired the validation namespace into the schema resolvers
+-- every visible card title, field label, button, and toast
+notification stayed hardcoded English regardless of locale. Wires
+the auth/form/toast namespaces (already ported in Task 1, unused
+until now) into the actual UI, closing the gap between 'the
+infrastructure works' and 'a user who switches locale sees their
+own language.'"
+```
+
+---
+
 ### Task 8: Final verification
 
 **Files:** none created or modified — verification only.
