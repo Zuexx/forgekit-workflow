@@ -2517,3 +2517,211 @@ gh pr create --title "feat: complete i18n port (sub-project 3)" --body "Closes o
 gh pr merge --merge --delete-branch
 git checkout main && git pull --ff-only origin main
 ```
+
+**Superseded during execution.** The controller already executed this task's work directly on
+`feat/i18n` throughout the plan (not a fresh branch created at the end), and this family's
+established practice is that the controller merges directly after the final whole-branch review —
+never via a task-dispatched subagent's `gh pr merge`. Step 4 above is not run as written; see
+Task 9 below, then `superpowers:finishing-a-development-branch`.
+
+### Task 9: Reject unsupported locale segments and canonicalize the default-locale prefix away
+
+**Added mid-implementation, not in the original plan.** The whole-branch final review (run after
+Task 8) found that `{-$locale}` matches *any* leading path segment, not just
+`en`/`zh-TW`/`ko-KR`: `/foo/dashboard` renders the real dashboard with `<html lang="en">` (an
+authenticated visitor gets a plausible-looking page under a garbage locale segment, with no 404),
+and `/en/dashboard` is a fully valid duplicate URL of `/dashboard` (the spec's "en has no path
+prefix" convention was only ever enforced by `withLocalePrefix` when *constructing* a redirect
+target, never by the router's own matching when a client requests `/en/...` directly). Not a
+security hole — the ABAC guard in `__root.tsx`'s `beforeLoad` receives the *unstripped* path when
+the leading segment isn't a recognized locale, and its own existing policy still denies/redirects
+appropriately — but it is a real correctness gap: unbounded duplicate URLs, no 404 for a bad
+locale segment, and a bookmarked bad-locale URL silently rendering the wrong (default) language
+forever. Confirmed directly against `@tanstack/router-core@1.171.30`'s installed source before
+writing this task: a route's `params.parse` option (`route.d.ts`'s `ParamsOptions`) returns
+`TParams | false`; `new-process-route-tree.js:571` shows `false` makes that node's match attempt
+return `null` for that URL, which is exactly the "reject this segment" hook needed — no route in
+this plan currently sets `params.parse` anywhere, so this task is additive, not a change to
+Task 3.5's already-reviewed route moves.
+
+**Files:**
+- Create: `app/src/shared/i18n/parse-locale-param.ts`
+- Create: `app/src/shared/i18n/parse-locale-param.test.ts`
+- Create: `app/src/routes/{-$locale}/route.tsx`
+
+**Interfaces:**
+- Consumes: `Locale`/`isLocale` from `#/shared/i18n/config` (Task 1); `DEFAULT_LOCALE` from the
+  `#/shared/i18n` barrel (Task 1); `buildLocale` from `#/shared/i18n/build-locale` (Task 2,
+  already unit-tested — this task adds no new test for it, only a new call site).
+- Produces: `parseLocaleParam(rawLocale: string | undefined): { locale: Locale | undefined } | false`
+  — nothing later in this plan consumes it; it's wired directly into the new route file.
+
+- [ ] **Step 1: Write the failing test for the pure parse function**
+
+Create `app/src/shared/i18n/parse-locale-param.test.ts`:
+
+```typescript
+import { describe, expect, it } from 'vitest'
+
+import { parseLocaleParam } from './parse-locale-param'
+
+describe('parseLocaleParam', () => {
+  it('accepts an absent locale segment as the default (no prefix)', () => {
+    expect(parseLocaleParam(undefined)).toEqual({ locale: undefined })
+  })
+
+  it('accepts each supported locale', () => {
+    expect(parseLocaleParam('en')).toEqual({ locale: 'en' })
+    expect(parseLocaleParam('zh-TW')).toEqual({ locale: 'zh-TW' })
+    expect(parseLocaleParam('ko-KR')).toEqual({ locale: 'ko-KR' })
+  })
+
+  it('rejects a segment that is not a supported locale', () => {
+    expect(parseLocaleParam('foo')).toBe(false)
+    expect(parseLocaleParam('EN')).toBe(false)
+  })
+})
+```
+
+- [ ] **Step 2: Run it to verify it fails**
+
+Run: `cd app && pnpm vitest run src/shared/i18n/parse-locale-param.test.ts`
+Expected: FAIL — `parse-locale-param.ts` does not exist yet.
+
+- [ ] **Step 3: Implement the pure parse function**
+
+Create `app/src/shared/i18n/parse-locale-param.ts`:
+
+```typescript
+import type { Locale } from './config'
+import { isLocale } from './config'
+
+/**
+ * params.parse for the {-$locale} route segment. Returning `false` (rather than accepting any
+ * string) makes TanStack Router's own matching treat an unsupported segment as no match at
+ * all — the router falls through to its not-found handling instead of silently rendering the
+ * default locale for any arbitrary path segment.
+ */
+export function parseLocaleParam(
+  rawLocale: string | undefined,
+): { locale: Locale | undefined } | false {
+  if (rawLocale === undefined) {
+    return { locale: undefined }
+  }
+  return isLocale(rawLocale) ? { locale: rawLocale } : false
+}
+```
+
+- [ ] **Step 4: Run the test to verify it passes**
+
+Run: `cd app && pnpm vitest run src/shared/i18n/parse-locale-param.test.ts`
+Expected: PASS, all 3 cases.
+
+- [ ] **Step 5: Wire it into a new layout route for the `{-$locale}` segment**
+
+Create `app/src/routes/{-$locale}/route.tsx`:
+
+```tsx
+import { createFileRoute, redirect } from '@tanstack/react-router'
+
+import { DEFAULT_LOCALE } from '#/shared/i18n'
+import { buildLocale } from '#/shared/i18n/build-locale'
+import { parseLocaleParam } from '#/shared/i18n/parse-locale-param'
+
+export const Route = createFileRoute('/{-$locale}')({
+  params: {
+    parse: (raw) => parseLocaleParam(raw.locale),
+  },
+  beforeLoad: ({ params, location }) => {
+    if (params.locale === DEFAULT_LOCALE) {
+      throw redirect({
+        to: buildLocale(location.pathname, undefined, undefined).path,
+        replace: true,
+      })
+    }
+  },
+})
+```
+
+No `component` is set — TanStack Router renders `<Outlet />` by default when a route has none
+(confirmed against `@tanstack/react-router@1.170.36`'s `Match.js:98-99`), so the four existing
+child routes (`index.tsx`, `dashboard.tsx`, `sign-in.tsx`, `sign-up.tsx`) keep rendering through
+this layout exactly as before — this file adds matching/redirect behavior only, no new UI.
+
+This task deliberately does not add a custom `notFoundComponent`. No route in this codebase
+configures one today (confirmed by grep), so an unsupported locale segment falls through to
+TanStack Router's own generic default (a plain "Not Found" render) — the same default every
+other unmatched URL in this app already gets. Building a polished 404 page is out of this task's
+scope; the fix here is only that a bad locale segment stops silently rendering the wrong page.
+
+- [ ] **Step 6: Regenerate the route tree**
+
+```bash
+cd app
+pnpm generate-routes
+```
+
+Expected: `app/src/routeTree.gen.ts` picks up the new `route.tsx` as the parent of the four
+existing `{-$locale}` child routes.
+
+- [ ] **Step 7: Run the full check suite**
+
+```bash
+cd app
+pnpm check
+pnpm lint
+pnpm lint:fsd
+pnpm test
+pnpm build
+```
+
+Expected: all pass/succeed. Exactly one new test file (3 new test cases); every other existing
+test still passes unchanged — this task adds a new route file and a new pure function, and
+touches no existing file's logic.
+
+- [ ] **Step 8: Manually verify against a real dev server**
+
+```bash
+cd app
+pnpm dev &
+sleep 5
+
+# Unsupported locale segment must NOT render the real dashboard under the wrong locale.
+# Record the actual status code and response body you observe — TanStack Start's default
+# not-found rendering behavior for an SSR request isn't independently confirmed by this task's
+# author; confirm it yourself and report what you see.
+curl -s -i http://localhost:3000/foo/dashboard | head -5
+curl -s http://localhost:3000/foo/dashboard | grep -a -o "Welcome" || echo "no Welcome text (expected)"
+
+# /en/* must canonicalize to the unprefixed path rather than serving a duplicate URL.
+curl -s -i http://localhost:3000/en/sign-in | grep -i "^HTTP\|^location"
+
+# Existing supported-locale and unprefixed paths must be unaffected (no regression).
+curl -s -i http://localhost:3000/zh-TW/sign-in | grep -i "^HTTP"
+curl -s -i http://localhost:3000/sign-in | grep -i "^HTTP"
+
+kill %1
+```
+
+Expected: `/foo/dashboard` does not contain the string `Welcome` (the real dashboard's greeting) —
+whatever status/body TanStack Router's default not-found render actually produces, it must not be
+the authenticated dashboard content. `/en/sign-in` responds with a redirect whose `location` is
+`/sign-in` (no `/en` prefix). `/zh-TW/sign-in` and `/sign-in` both still return their normal page
+(HTTP 200), confirming Task 3.5's existing routing is unaffected.
+
+- [ ] **Step 9: Commit**
+
+```bash
+git add app/src/shared/i18n/parse-locale-param.ts app/src/shared/i18n/parse-locale-param.test.ts \
+  "app/src/routes/{-\$locale}/route.tsx" app/src/routeTree.gen.ts
+git commit -m "fix: reject unsupported locale segments and canonicalize /en/* away
+
+{-\$locale} matched any leading path segment, not just the three
+supported locales -- an authenticated visitor hitting /foo/dashboard
+got a plausible-looking page under a garbage locale, and /en/* was a
+permanent, unredirected duplicate of the unprefixed path. A new
+params.parse on a {-\$locale}/route.tsx layout rejects unsupported
+segments (falls through to the router's own not-found handling) and
+a beforeLoad redirect canonicalizes the default locale's prefix away,
+reusing the already-tested buildLocale path-stripping logic."
+```
