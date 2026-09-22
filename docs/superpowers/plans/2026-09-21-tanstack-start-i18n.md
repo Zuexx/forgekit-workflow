@@ -1,0 +1,2727 @@
+# i18n for forgekit-tanstack-start Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** Port forgekit's full 3-locale i18n setup (en/zh-TW/ko-KR) into `forgekit-tanstack-start`, using `react-i18next` in place of forgekit's Next.js-coupled `next-intl`, with locale resolution kept fully separate from the already-shipped ABAC guard.
+
+**Architecture:** A pure locale-resolution function (`buildLocale`) mirrors sub-project 2's `buildContext`/`build-context.ts` pattern, wrapped by a `createServerFn`-based `resolveLocale` for the server-only cookie/header reads. `__root.tsx`'s `beforeLoad` runs locale resolution and the existing ABAC check as two independent steps that only rejoin when building a policy redirect's URL. A generic `RadialMenu` primitive (ported from forgekit's real component, not a stand-in) backs a new `LocaleSwitcher`, mounted on the sign-in/sign-up cards.
+
+**Tech Stack:** `react-i18next`/`i18next` (message catalogs, hooks, typed keys via module augmentation), `motion` (spring animation), `lucide-react` (icons), StyleX (existing styling system) — no new dependency outside these four.
+
+**Spec:** `docs/superpowers/specs/2026-09-21-tanstack-start-i18n-design.md`
+
+## Global Constraints
+
+- Library: `react-i18next`/`i18next`, never `next-intl` — next-intl's routing layer assumes Next.js's middleware model, which TanStack Start has no equivalent for.
+- Locales: `en` (default, no URL prefix), `zh-TW`, `ko-KR` — full replication of forgekit's current set, not a reduction (that decision belongs to sub-project 7).
+- `evaluatePolicy`/`resolveContext`/`AbacContext` (`app/src/shared/api/abac/`) get **zero** interface changes. They keep receiving an already-locale-stripped path. Locale resolution never enters their types.
+- Dependency versions pinned to match forgekit's `app/package.json` exactly: `motion@^13.2.0`, `lucide-react@^1.45.0`. `i18next@^26.4.2`, `react-i18next@^17.0.14` have no forgekit equivalent to match (forgekit uses next-intl) — pin to the latest mutually-compatible release pair as of this plan's writing.
+- FSD placement: everything lives under one `shared/i18n/` segment (catalogs, config, resolution logic, the one piece of coupled UI) plus a generic `shared/ui/radial-menu.tsx` — confirmed directly against the installed `@feature-sliced/steiger-plugin@0.7.0`'s bad-names list that `i18n` is not a flagged segment name, and that `shared`/`app` layers are exempt from the `insignificant-slice` rule (unlike `features`/`entities`/`widgets`). Every task in this plan can therefore be reviewed and merged individually with fully green CI — no branch-stacking workaround is needed this time (unlike sub-project 2, which needed one for exactly this class of constraint).
+- Any `beforeLoad` step that calls a `createServerFn`-wrapped RPC must fail open (let the request through on error), matching the established pattern from sub-project 2's final-review fix to the ABAC gate — this sub-project's own new locale-resolution RPC follows the identical discipline from day one, not as a fix-later item.
+- No automated test exercises `__root.tsx`'s actual `beforeLoad` wiring at the router level — verified manually against a real dev server instead, matching the exact same accepted gap already recorded for sub-projects 1 and 2.
+
+---
+
+### Task 1: Locale config, message catalogs, and the i18next instance factory
+
+**Files:**
+- Modify: `app/tsconfig.json` (add `resolveJsonModule: true`)
+- Modify: `app/package.json` (add `i18next`, `react-i18next`, `motion`, `lucide-react`)
+- Create: `app/src/shared/i18n/config.ts`
+- Create: `app/src/shared/i18n/locales/en/{auth,common,form,toast,validation}.json`
+- Create: `app/src/shared/i18n/locales/zh-TW/{auth,common,form,toast,validation}.json`
+- Create: `app/src/shared/i18n/locales/ko-KR/{auth,common,form,toast,validation}.json`
+- Create: `app/src/shared/i18n/i18n.ts`
+- Create: `app/src/shared/i18n/react-i18next.d.ts`
+- Test: `app/src/shared/i18n/i18n.test.ts`
+
+**Interfaces:**
+- Consumes: nothing from earlier tasks (first task).
+- Produces: `SUPPORTED_LOCALES: readonly Locale[]`, `DEFAULT_LOCALE: Locale`, `LOCALE_COOKIE: string`, `NAMESPACES: readonly Namespace[]` (all from `config.ts`); `createI18nInstance(locale: Locale): i18n` (from `i18n.ts`) — later tasks (3, 7) call this to build a request-scoped i18next instance.
+
+- [ ] **Step 1: Add `resolveJsonModule` to tsconfig**
+
+Modify `app/tsconfig.json`'s `compilerOptions` — add one line so `tsc --noEmit` (this repo's `pnpm check`) accepts the JSON imports this task adds:
+
+```json
+    "moduleResolution": "bundler",
+    "resolveJsonModule": true,
+    "allowImportingTsExtensions": true,
+```
+
+- [ ] **Step 2: Add the new dependencies**
+
+In `app/package.json`'s `"dependencies"` block, add (keep the existing alphabetical order):
+
+```json
+    "i18next": "^26.4.2",
+    "lucide-react": "^1.45.0",
+    "motion": "^13.2.0",
+```
+
+and:
+
+```json
+    "react-i18next": "^17.0.14",
+```
+
+in its alphabetical position. Run `cd app && pnpm install` and confirm `app/pnpm-lock.yaml` picks up the four new entries.
+
+- [ ] **Step 3: Create the locale config**
+
+Create `app/src/shared/i18n/config.ts`:
+
+```typescript
+export const SUPPORTED_LOCALES = ['en', 'zh-TW', 'ko-KR'] as const
+export type Locale = (typeof SUPPORTED_LOCALES)[number]
+
+export const DEFAULT_LOCALE: Locale = 'en'
+
+export const NAMESPACES = ['auth', 'common', 'form', 'toast', 'validation'] as const
+export type Namespace = (typeof NAMESPACES)[number]
+
+export const LOCALE_COOKIE = 'forgekit-tanstack-start.locale'
+
+export function isLocale(value: string): value is Locale {
+  return (SUPPORTED_LOCALES as readonly string[]).includes(value)
+}
+```
+
+- [ ] **Step 4: Create the message catalogs**
+
+Create `app/src/shared/i18n/locales/en/auth.json`:
+
+```json
+{
+  "signIn": {
+    "subtitle": "Your Application",
+    "loginWithSSO": "Login with SSO",
+    "orContinueWith": "Or continue with",
+    "forgotPassword": "Forgot your password?",
+    "loginButton": "Login",
+    "signupPrompt": "Don't have an account?",
+    "signupCTA": "Sign up"
+  },
+  "signUp": {
+    "subtitle": "Your Application",
+    "signUpDesc": "Enter your email below to create your account",
+    "passwordHint": "Must be at least 8 characters long.",
+    "createAccountButton": "Create Account",
+    "signinPrompt": "Already have an account?",
+    "signinCTA": "Sign In"
+  }
+}
+```
+
+Create `app/src/shared/i18n/locales/en/common.json`:
+
+```json
+{
+  "tos": {
+    "prefix": "By clicking continue, you agree to our",
+    "and": "and",
+    "terms": "Terms of Service",
+    "privacy": "Privacy Policy"
+  }
+}
+```
+
+Create `app/src/shared/i18n/locales/en/form.json`:
+
+```json
+{
+  "fullName": {
+    "label": "Full Name",
+    "placeholder": "Enter you name"
+  },
+  "email": {
+    "label": "Email",
+    "placeholder": "name@example.com"
+  },
+  "password": {
+    "label": "Password",
+    "placeholder": "Enter your password (case-sensitive)"
+  },
+  "signUp": {
+    "password": {
+      "label": "Password",
+      "placeholder": "Password"
+    },
+    "confirmPassword": {
+      "label": "Confirm Password",
+      "placeholder": "Confirm Password"
+    }
+  }
+}
+```
+
+Create `app/src/shared/i18n/locales/en/toast.json`:
+
+```json
+{
+  "success": {
+    "signIn": "Signed in successfully",
+    "signUp": "Account created successfully",
+    "signOut": "Signed out successfully",
+    "default": "Operation successful",
+    "fetchCurrent": "Fetched current user"
+  },
+  "error": {
+    "signIn": "Sign in failed. Please check your credentials",
+    "signUp": "Sign up failed. Please check your details",
+    "signOut": "Sign out failed",
+    "default": "Operation failed. Please try again",
+    "network": "Network connection failed",
+    "fetchCurrent": "Failed to fetch current user"
+  },
+  "loading": {
+    "signIn": "Signing in...",
+    "signUp": "Creating account...",
+    "default": "Processing..."
+  }
+}
+```
+
+Create `app/src/shared/i18n/locales/en/validation.json`:
+
+```json
+{
+  "authenticate": {
+    "name": {
+      "required": "Name is required",
+      "invalid": "Please enter your name"
+    },
+    "email": {
+      "required": "Email is required",
+      "invalid": "Please enter a valid email address"
+    },
+    "password": {
+      "required": "Password is required",
+      "min": "Password must be at least {{min}} characters"
+    },
+    "confirmPassword": {
+      "required": "Confirm Password is required",
+      "confirm": "Password not matched"
+    }
+  }
+}
+```
+
+(Note the `{{min}}` double-brace form — this is `i18next`'s interpolation syntax, not `next-intl`'s single-brace `{min}`. Every other namespace file is copied byte-for-byte from forgekit; this is the one intentional syntax change, needed by the library switch.)
+
+Create `app/src/shared/i18n/locales/zh-TW/auth.json`:
+
+```json
+{
+  "signIn": {
+    "subtitle": "您的應用程式",
+    "loginWithSSO": "使用 SSO 帳號登入",
+    "orContinueWith": "或使用以下方式登入",
+    "forgotPassword": "忘記密碼？",
+    "loginButton": "登入",
+    "signupPrompt": "尚未建立帳號？",
+    "signupCTA": "申請帳號"
+  },
+  "signUp": {
+    "subtitle": "您的應用程式",
+    "signUpDesc": "請在下方輸入電子郵件以建立帳號",
+    "passwordHint": "密碼長度至少需為 8 個字元。",
+    "createAccountButton": "建立帳號",
+    "signinPrompt": "已經有帳號了嗎？",
+    "signinCTA": "登入"
+  }
+}
+```
+
+Create `app/src/shared/i18n/locales/zh-TW/common.json`:
+
+```json
+{
+  "tos": {
+    "prefix": "點擊繼續即表示您同意本系統的",
+    "and": "以及",
+    "terms": "服務條款",
+    "privacy": "隱私權政策"
+  }
+}
+```
+
+Create `app/src/shared/i18n/locales/zh-TW/form.json`:
+
+```json
+{
+  "fullName": {
+    "label": "姓名",
+    "placeholder": "請輸入姓名"
+  },
+  "email": {
+    "label": "電子郵件地址",
+    "placeholder": "name@example.com"
+  },
+  "password": {
+    "label": "密碼",
+    "placeholder": "請輸入密碼（區分大小寫）"
+  },
+  "signUp": {
+    "password": {
+      "label": "密碼",
+      "placeholder": "密碼"
+    },
+    "confirmPassword": {
+      "label": "確認密碼",
+      "placeholder": "確認密碼"
+    }
+  }
+}
+```
+
+Create `app/src/shared/i18n/locales/zh-TW/toast.json`:
+
+```json
+{
+  "success": {
+    "signIn": "登入成功",
+    "signUp": "註冊成功",
+    "signOut": "登出成功",
+    "default": "操作成功",
+    "fetchCurrent": "取得當前使用者成功"
+  },
+  "error": {
+    "signIn": "登入失敗，請檢查您的帳號密碼",
+    "signUp": "註冊失敗，請檢查您輸入的資料",
+    "signOut": "登出失敗",
+    "default": "操作失敗，請稍後再試",
+    "network": "網路連線失敗",
+    "fetchCurrent": "取得當前使用者失敗"
+  },
+  "loading": {
+    "signIn": "登入中...",
+    "signUp": "註冊中...",
+    "default": "處理中..."
+  }
+}
+```
+
+Create `app/src/shared/i18n/locales/zh-TW/validation.json`:
+
+```json
+{
+  "authenticate": {
+    "name": {
+      "required": "請輸入姓名",
+      "invalid": "請輸入有效的姓名"
+    },
+    "email": {
+      "required": "請輸入電子郵件地址",
+      "invalid": "請輸入有效的電子郵件地址"
+    },
+    "password": {
+      "required": "請輸入密碼",
+      "min": "密碼長度至少需為 {{min}} 個字元"
+    },
+    "confirmPassword": {
+      "required": "請輸入確認密碼",
+      "confirm": "密碼不一致"
+    }
+  }
+}
+```
+
+Create `app/src/shared/i18n/locales/ko-KR/auth.json`:
+
+```json
+{
+  "signIn": {
+    "subtitle": "귀하의 애플리케이션",
+    "loginWithSSO": "SSO 계정으로 로그인",
+    "orContinueWith": "또는 다음 방법으로 계속",
+    "forgotPassword": "비밀번호를 잊으셨습니까?",
+    "loginButton": "로그인",
+    "signupPrompt": "계정이 없으신가요?",
+    "signupCTA": "계정 신청"
+  },
+  "signUp": {
+    "subtitle": "귀하의 애플리케이션",
+    "signUpDesc": "아래에 이메일을 입력하여 계정을 생성하세요",
+    "passwordHint": "비밀번호는 최소 8자 이상이어야 합니다.",
+    "createAccountButton": "계정 생성",
+    "signinPrompt": "이미 계정이 있으신가요?",
+    "signinCTA": "로그인"
+  }
+}
+```
+
+Create `app/src/shared/i18n/locales/ko-KR/common.json`:
+
+```json
+{
+  "tos": {
+    "prefix": "계속 진행하면 본 시스템의",
+    "and": "및",
+    "terms": "서비스 이용약관",
+    "privacy": "개인정보 처리방침"
+  }
+}
+```
+
+Create `app/src/shared/i18n/locales/ko-KR/form.json`:
+
+```json
+{
+  "fullName": {
+    "label": "이름",
+    "placeholder": "이름을 입력하세요"
+  },
+  "email": {
+    "label": "이메일",
+    "placeholder": "name@example.com"
+  },
+  "password": {
+    "label": "비밀번호",
+    "placeholder": "비밀번호를 입력하세요 (대소문자 구분)"
+  },
+  "signUp": {
+    "password": {
+      "label": "비밀번호",
+      "placeholder": "비밀번호"
+    },
+    "confirmPassword": {
+      "label": "비밀번호 확인",
+      "placeholder": "비밀번호 확인"
+    }
+  }
+}
+```
+
+Create `app/src/shared/i18n/locales/ko-KR/toast.json`:
+
+```json
+{
+  "success": {
+    "signIn": "로그인 성공",
+    "signUp": "회원가입 성공",
+    "signOut": "로그아웃 성공",
+    "default": "작업 성공",
+    "fetchCurrent": "현재 사용자 가져오기 성공"
+  },
+  "error": {
+    "signIn": "로그인 실패. 계정 정보를 확인해주세요",
+    "signUp": "회원가입 실패. 입력한 정보를 확인해주세요",
+    "signOut": "로그아웃 실패",
+    "default": "작업 실패. 다시 시도해주세요",
+    "network": "네트워크 연결 실패",
+    "fetchCurrent": "현재 사용자 가져오기 실패"
+  },
+  "loading": {
+    "signIn": "로그인 중...",
+    "signUp": "회원가입 중...",
+    "default": "처리 중..."
+  }
+}
+```
+
+Create `app/src/shared/i18n/locales/ko-KR/validation.json`:
+
+```json
+{
+  "authenticate": {
+    "name": {
+      "required": "이름은 필수 입력 항목입니다",
+      "invalid": "이름을 입력해 주세요"
+    },
+    "email": {
+      "required": "이메일 주소를 입력해 주세요",
+      "invalid": "유효한 이메일 주소를 입력해 주세요"
+    },
+    "password": {
+      "required": "비밀번호를 입력해 주세요",
+      "min": "비밀번호는 최소 {{min}}자 이상이어야 합니다"
+    },
+    "confirmPassword": {
+      "required": "비밀번호 확인을 입력해 주세요",
+      "confirm": "비밀번호가 일치하지 않습니다"
+    }
+  }
+}
+```
+
+- [ ] **Step 5: Create the i18next instance factory**
+
+Create `app/src/shared/i18n/i18n.ts`:
+
+```typescript
+import i18next from 'i18next'
+import { initReactI18next } from 'react-i18next'
+
+import type { Locale } from './config'
+import { DEFAULT_LOCALE, NAMESPACES } from './config'
+
+import enAuth from './locales/en/auth.json'
+import enCommon from './locales/en/common.json'
+import enForm from './locales/en/form.json'
+import enToast from './locales/en/toast.json'
+import enValidation from './locales/en/validation.json'
+import zhTWAuth from './locales/zh-TW/auth.json'
+import zhTWCommon from './locales/zh-TW/common.json'
+import zhTWForm from './locales/zh-TW/form.json'
+import zhTWToast from './locales/zh-TW/toast.json'
+import zhTWValidation from './locales/zh-TW/validation.json'
+import koKRAuth from './locales/ko-KR/auth.json'
+import koKRCommon from './locales/ko-KR/common.json'
+import koKRForm from './locales/ko-KR/form.json'
+import koKRToast from './locales/ko-KR/toast.json'
+import koKRValidation from './locales/ko-KR/validation.json'
+
+const resources = {
+  en: {
+    auth: enAuth,
+    common: enCommon,
+    form: enForm,
+    toast: enToast,
+    validation: enValidation,
+  },
+  'zh-TW': {
+    auth: zhTWAuth,
+    common: zhTWCommon,
+    form: zhTWForm,
+    toast: zhTWToast,
+    validation: zhTWValidation,
+  },
+  'ko-KR': {
+    auth: koKRAuth,
+    common: koKRCommon,
+    form: koKRForm,
+    toast: koKRToast,
+    validation: koKRValidation,
+  },
+}
+
+/**
+ * A fresh instance per call, not a shared module-level singleton — request isolation
+ * matters here the same way it already does for this app's Zustand store (sub-project 1's
+ * per-request StateProvider decision): a singleton would leak one visitor's locale into
+ * another's concurrent SSR render.
+ */
+export function createI18nInstance(locale: Locale) {
+  const instance = i18next.createInstance()
+  void instance.use(initReactI18next).init({
+    lng: locale,
+    fallbackLng: DEFAULT_LOCALE,
+    resources,
+    ns: NAMESPACES,
+    defaultNS: 'common',
+    interpolation: { escapeValue: false },
+  })
+  return instance
+}
+```
+
+- [ ] **Step 6: Create the typed-keys module augmentation**
+
+Create `app/src/shared/i18n/react-i18next.d.ts`:
+
+```typescript
+import 'react-i18next'
+
+import type auth from './locales/en/auth.json'
+import type common from './locales/en/common.json'
+import type form from './locales/en/form.json'
+import type toast from './locales/en/toast.json'
+import type validation from './locales/en/validation.json'
+
+declare module 'react-i18next' {
+  interface CustomTypeOptions {
+    defaultNS: 'common'
+    resources: {
+      auth: typeof auth
+      common: typeof common
+      form: typeof form
+      toast: typeof toast
+      validation: typeof validation
+    }
+  }
+}
+```
+
+- [ ] **Step 7: Write the instance-factory test**
+
+Create `app/src/shared/i18n/i18n.test.ts`:
+
+```typescript
+import { describe, expect, it } from 'vitest'
+
+import { createI18nInstance } from './i18n'
+
+describe('createI18nInstance', () => {
+  it('resolves a key from the requested locale', () => {
+    const i18n = createI18nInstance('zh-TW')
+    expect(i18n.t('common:tos.terms')).toBe('服務條款')
+  })
+
+  it('resolves the same key from a different locale', () => {
+    const i18n = createI18nInstance('en')
+    expect(i18n.t('common:tos.terms')).toBe('Terms of Service')
+  })
+
+  it('interpolates a validation message', () => {
+    const i18n = createI18nInstance('en')
+    expect(i18n.t('validation:authenticate.password.min', { min: 8 })).toBe(
+      'Password must be at least 8 characters',
+    )
+  })
+
+  it('creates independent instances per call', () => {
+    const first = createI18nInstance('en')
+    const second = createI18nInstance('zh-TW')
+    expect(first.language).toBe('en')
+    expect(second.language).toBe('zh-TW')
+  })
+})
+```
+
+- [ ] **Step 8: Run the test and the full check suite**
+
+```bash
+cd app
+pnpm test i18n.test.ts
+pnpm check
+pnpm lint
+pnpm lint:fsd
+```
+
+Expected: all pass. `pnpm lint:fsd` still reports "No problems found!" (`i18n` is not on steiger's bad-names list, confirmed directly against the installed plugin before this plan was written).
+
+- [ ] **Step 9: Commit**
+
+```bash
+git add app/tsconfig.json app/package.json app/pnpm-lock.yaml app/src/shared/i18n
+git commit -m "feat: add locale config, message catalogs, and i18next instance factory"
+```
+
+---
+
+### Task 2: Locale resolution (pure core + server wrapper)
+
+**Files:**
+- Create: `app/src/shared/i18n/build-locale.ts`
+- Create: `app/src/shared/i18n/build-locale.test.ts`
+- Create: `app/src/shared/i18n/resolve-locale.ts`
+
+**Interfaces:**
+- Consumes: `SUPPORTED_LOCALES`, `DEFAULT_LOCALE`, `LOCALE_COOKIE`, `isLocale` from `./config` (Task 1).
+- Produces: `buildLocale(path: string, cookieLocale: string | undefined, acceptLanguage: string | undefined): { locale: Locale; path: string }`, `withLocalePrefix(path: string, locale: Locale): string` (both from `build-locale.ts`); `resolveLocale(path: string): Promise<{ locale: Locale; path: string }>` (from `resolve-locale.ts`) — Task 3 calls both `resolveLocale` and `withLocalePrefix`.
+
+- [ ] **Step 1: Write the failing tests for `buildLocale`/`withLocalePrefix`**
+
+Create `app/src/shared/i18n/build-locale.test.ts`:
+
+```typescript
+import { describe, expect, it } from 'vitest'
+
+import { buildLocale, withLocalePrefix } from './build-locale'
+
+describe('buildLocale', () => {
+  it('takes the locale from a leading path segment', () => {
+    const result = buildLocale('/zh-TW/dashboard', undefined, undefined)
+    expect(result).toEqual({ locale: 'zh-TW', path: '/dashboard' })
+  })
+
+  it('normalizes a bare locale-only path to root', () => {
+    const result = buildLocale('/en', undefined, undefined)
+    expect(result).toEqual({ locale: 'en', path: '/' })
+  })
+
+  it('does not treat a look-alike segment as a locale', () => {
+    const result = buildLocale('/english/page', undefined, undefined)
+    expect(result.locale).toBe('en')
+    expect(result.path).toBe('/english/page')
+  })
+
+  it('strips only the leading locale segment, never a later occurrence', () => {
+    const result = buildLocale('/zh-TW/enroll', undefined, undefined)
+    expect(result).toEqual({ locale: 'zh-TW', path: '/enroll' })
+  })
+
+  it('falls back to a valid cookie locale when the path has no prefix', () => {
+    const result = buildLocale('/dashboard', 'ko-KR', undefined)
+    expect(result).toEqual({ locale: 'ko-KR', path: '/dashboard' })
+  })
+
+  it('ignores an invalid cookie value and falls through to negotiation', () => {
+    const result = buildLocale('/dashboard', 'fr', 'ko-KR,en;q=0.5')
+    expect(result.locale).toBe('ko-KR')
+  })
+
+  it('negotiates a supported locale from Accept-Language when no path/cookie locale exists', () => {
+    const result = buildLocale('/dashboard', undefined, 'zh-TW,en;q=0.8')
+    expect(result).toEqual({ locale: 'zh-TW', path: '/dashboard' })
+  })
+
+  it('falls back to the default locale when nothing matches', () => {
+    const result = buildLocale('/dashboard', undefined, 'fr-FR,de;q=0.5')
+    expect(result).toEqual({ locale: 'en', path: '/dashboard' })
+  })
+
+  it('falls back to the default locale when there is no Accept-Language at all', () => {
+    const result = buildLocale('/dashboard', undefined, undefined)
+    expect(result).toEqual({ locale: 'en', path: '/dashboard' })
+  })
+})
+
+describe('withLocalePrefix', () => {
+  it('adds no prefix for the default locale', () => {
+    expect(withLocalePrefix('/sign-in', 'en')).toBe('/sign-in')
+  })
+
+  it('prefixes a non-default locale', () => {
+    expect(withLocalePrefix('/sign-in', 'zh-TW')).toBe('/zh-TW/sign-in')
+  })
+
+  it('prefixes the root path without a double slash', () => {
+    expect(withLocalePrefix('/', 'ko-KR')).toBe('/ko-KR')
+  })
+})
+```
+
+- [ ] **Step 2: Run the tests to verify they fail**
+
+```bash
+cd app
+pnpm test build-locale.test.ts
+```
+
+Expected: FAIL — `build-locale.ts` doesn't exist yet.
+
+- [ ] **Step 3: Implement `buildLocale`/`withLocalePrefix`**
+
+Create `app/src/shared/i18n/build-locale.ts`:
+
+```typescript
+import type { Locale } from './config'
+import { DEFAULT_LOCALE, SUPPORTED_LOCALES, isLocale } from './config'
+
+/**
+ * The pure half of locale resolution — no server-only imports, so it's directly
+ * unit-testable with plain values. resolve-locale.ts (a createServerFn wrapper — it can
+ * only run inside TanStack Start's real request runtime) reads the actual cookie/header
+ * values and passes them in here. Mirrors sub-project 2's build-context.ts/resolve-context.ts
+ * split for the exact same reason.
+ */
+export function buildLocale(
+  path: string,
+  cookieLocale: string | undefined,
+  acceptLanguage: string | undefined,
+): { locale: Locale; path: string } {
+  const segments = path.split('/')
+  const leadingSegment = segments[1] ?? ''
+
+  if (isLocale(leadingSegment)) {
+    const rest = `/${segments.slice(2).join('/')}`
+    return { locale: leadingSegment, path: rest === '/' ? '/' : rest.replace(/\/+$/, '') }
+  }
+
+  if (cookieLocale && isLocale(cookieLocale)) {
+    return { locale: cookieLocale, path }
+  }
+
+  return { locale: negotiateLocale(acceptLanguage), path }
+}
+
+function negotiateLocale(acceptLanguage: string | undefined): Locale {
+  if (!acceptLanguage) {
+    return DEFAULT_LOCALE
+  }
+
+  const preferences = acceptLanguage
+    .split(',')
+    .map((part) => part.split(';')[0]?.trim().toLowerCase())
+    .filter((part): part is string => Boolean(part))
+
+  for (const preference of preferences) {
+    const match = SUPPORTED_LOCALES.find(
+      (locale) =>
+        locale.toLowerCase() === preference ||
+        preference.startsWith(`${locale.toLowerCase().split('-')[0]}-`) ||
+        preference === locale.toLowerCase().split('-')[0],
+    )
+    if (match) {
+      return match
+    }
+  }
+
+  return DEFAULT_LOCALE
+}
+
+export function withLocalePrefix(path: string, locale: Locale): string {
+  if (locale === DEFAULT_LOCALE) {
+    return path
+  }
+  return path === '/' ? `/${locale}` : `/${locale}${path}`
+}
+```
+
+- [ ] **Step 4: Run the tests to verify they pass**
+
+```bash
+cd app
+pnpm test build-locale.test.ts
+```
+
+Expected: PASS, all 12 cases.
+
+- [ ] **Step 5: Implement the server wrapper**
+
+Create `app/src/shared/i18n/resolve-locale.ts`:
+
+```typescript
+import { createServerFn } from '@tanstack/react-start'
+import { getCookie, getRequestHeader } from '@tanstack/react-start/server'
+
+import type { Locale } from './config'
+import { LOCALE_COOKIE } from './config'
+import { buildLocale } from './build-locale'
+
+/**
+ * getCookie/getRequestHeader are server-only APIs, same import-protection constraint
+ * documented in shared/api/abac/resolve-context.ts and shared/api/require-session.ts —
+ * createServerFn is the bridge. No test of its own: it can only run inside TanStack
+ * Start's real request runtime ("No Start context found in AsyncLocalStorage" outside
+ * it), same accepted gap as those two files. buildLocale (above) carries the real,
+ * directly-tested logic.
+ */
+const resolveLocaleFn = createServerFn({ method: 'GET' })
+  .validator((data: { path: string }) => data)
+  .handler(({ data }) => {
+    const cookieLocale = getCookie(LOCALE_COOKIE)
+    const acceptLanguage = getRequestHeader('accept-language')
+    return buildLocale(data.path, cookieLocale, acceptLanguage)
+  })
+
+export function resolveLocale(path: string): Promise<{ locale: Locale; path: string }> {
+  return resolveLocaleFn({ data: { path } })
+}
+```
+
+- [ ] **Step 6: Run the full check suite**
+
+```bash
+cd app
+pnpm check
+pnpm lint
+pnpm lint:fsd
+pnpm test
+```
+
+Expected: all pass.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add app/src/shared/i18n/build-locale.ts app/src/shared/i18n/build-locale.test.ts app/src/shared/i18n/resolve-locale.ts
+git commit -m "feat: add locale resolution (pure build-locale + createServerFn wrapper)"
+```
+
+---
+
+### Task 3: Wire locale into `__root.tsx` and mount the i18next provider
+
+**Files:**
+- Modify: `app/src/routes/__root.tsx`
+- Modify: `app/src/app/root-document.tsx`
+
+**Interfaces:**
+- Consumes: `resolveLocale`, `withLocalePrefix` (Task 2); `createI18nInstance`, `DEFAULT_LOCALE`, `Locale` (Task 1); `evaluatePolicy`, `resolveContext` (sub-project 2, unchanged).
+- Produces: `beforeLoad` returns `{ locale: Locale }` in route context — Task 5 (`LocaleSwitcher`) and any future route reads `Route.useRouteContext()`/`useRouteContext({ from: '__root__' })` to get it.
+
+- [ ] **Step 1: Read the current `__root.tsx`**
+
+It currently reads (confirmed against the repo before writing this task):
+
+```tsx
+import { createRootRoute, redirect } from '@tanstack/react-router'
+
+import { evaluatePolicy, resolveContext } from '#/shared/api/abac'
+import { ABAC_CONFIG } from '#/shared/lib/abac-config'
+import { RootDocument } from '#/app/root-document'
+import appCss from '../styles.css?url'
+
+export const Route = createRootRoute({
+  beforeLoad: async ({ location }) => {
+    let decision
+    try {
+      decision = evaluatePolicy(
+        await resolveContext(location.pathname, ABAC_CONFIG),
+      )
+    } catch {
+      // Fail open: this gate is a cheap redirect convenience, not the real authorization
+      // boundary — requireSession() on protected routes is, so letting a transient
+      // resolveContext RPC failure through here (rather than breaking every route,
+      // including public ones) doesn't create a security hole.
+      return
+    }
+    if (decision.effect === 'redirect') {
+      throw redirect({ to: decision.to })
+    }
+  },
+  head: () => ({ /* unchanged */ }),
+  shellComponent: RootDocument,
+})
+```
+
+- [ ] **Step 2: Add the locale-resolution step**
+
+Replace the `beforeLoad` body with a version that resolves locale first (fail-open to `DEFAULT_LOCALE` on error, the same discipline as the ABAC step right below it), strips the locale segment before handing the path to `resolveContext` (unchanged interface), and prefixes any policy redirect with the resolved locale:
+
+```tsx
+import { createRootRoute, redirect } from '@tanstack/react-router'
+
+import { evaluatePolicy, resolveContext } from '#/shared/api/abac'
+import { ABAC_CONFIG } from '#/shared/lib/abac-config'
+import { DEFAULT_LOCALE } from '#/shared/i18n/config'
+import type { Locale } from '#/shared/i18n/config'
+import { resolveLocale } from '#/shared/i18n/resolve-locale'
+import { withLocalePrefix } from '#/shared/i18n/build-locale'
+import { RootDocument } from '#/app/root-document'
+import appCss from '../styles.css?url'
+
+export const Route = createRootRoute({
+  beforeLoad: async ({ location }) => {
+    let locale: Locale = DEFAULT_LOCALE
+    let path = location.pathname
+    try {
+      const localeResult = await resolveLocale(location.pathname)
+      locale = localeResult.locale
+      path = localeResult.path
+    } catch {
+      // Fail open to the default locale — same reasoning as the ABAC gate below: this
+      // step is a convenience, not a security boundary, so a transient RPC failure
+      // shouldn't break every route.
+    }
+
+    let decision
+    try {
+      decision = evaluatePolicy(await resolveContext(path, ABAC_CONFIG))
+    } catch {
+      return { locale }
+    }
+    if (decision.effect === 'redirect') {
+      throw redirect({ to: withLocalePrefix(decision.to, locale) })
+    }
+    return { locale }
+  },
+  head: () => ({ /* unchanged */ }),
+  shellComponent: RootDocument,
+})
+```
+
+Keep the existing `head` function's body exactly as it is today — only `beforeLoad` changes.
+
+- [ ] **Step 3: Mount the i18next provider in `root-document.tsx`**
+
+The current file:
+
+```tsx
+import { HeadContent, Scripts } from '@tanstack/react-router'
+import { Toaster } from 'react-hot-toast'
+
+import { QueryProvider, useSyncAuthSession } from '#/shared/api'
+import { StateProvider } from '#/shared/state'
+
+function AuthSessionSync({ children }: { children: React.ReactNode }) {
+  useSyncAuthSession()
+  return <>{children}</>
+}
+
+export function RootDocument({ children }: { children: React.ReactNode }) {
+  return (
+    <html lang="en">
+      <head>
+        <HeadContent />
+        {import.meta.env.DEV && (
+          <script type="module" src="/@id/virtual:stylex:runtime" />
+        )}
+      </head>
+      <body>
+        <StateProvider>
+          <QueryProvider>
+            <AuthSessionSync>{children}</AuthSessionSync>
+          </QueryProvider>
+        </StateProvider>
+        <Toaster position="bottom-right" />
+
+        <Scripts />
+      </body>
+    </html>
+  )
+}
+```
+
+Add an `I18nProvider` wrapper (same shape as the existing `AuthSessionSync`, reading the root route's context via `useRouteContext`) around the same subtree, and use the resolved locale for the `<html lang>` attribute too:
+
+```tsx
+import { HeadContent, Scripts, useRouteContext } from '@tanstack/react-router'
+import { useMemo } from 'react'
+import { I18nextProvider } from 'react-i18next'
+import { Toaster } from 'react-hot-toast'
+
+import { QueryProvider, useSyncAuthSession } from '#/shared/api'
+import { StateProvider } from '#/shared/state'
+import { createI18nInstance } from '#/shared/i18n/i18n'
+
+function AuthSessionSync({ children }: { children: React.ReactNode }) {
+  useSyncAuthSession()
+  return <>{children}</>
+}
+
+function I18nProvider({ children }: { children: React.ReactNode }) {
+  const { locale } = useRouteContext({ from: '__root__' })
+  const i18n = useMemo(() => createI18nInstance(locale), [locale])
+  return <I18nextProvider i18n={i18n}>{children}</I18nextProvider>
+}
+
+export function RootDocument({ children }: { children: React.ReactNode }) {
+  const { locale } = useRouteContext({ from: '__root__' })
+
+  return (
+    <html lang={locale}>
+      <head>
+        <HeadContent />
+        {import.meta.env.DEV && (
+          <script type="module" src="/@id/virtual:stylex:runtime" />
+        )}
+      </head>
+      <body>
+        <StateProvider>
+          <QueryProvider>
+            <I18nProvider>
+              <AuthSessionSync>{children}</AuthSessionSync>
+            </I18nProvider>
+          </QueryProvider>
+        </StateProvider>
+        <Toaster position="bottom-right" />
+
+        <Scripts />
+      </body>
+    </html>
+  )
+}
+```
+
+- [ ] **Step 4: Run the full check suite**
+
+```bash
+cd app
+pnpm check
+pnpm lint
+pnpm lint:fsd
+pnpm test
+pnpm build
+```
+
+Expected: all pass/succeed. No test file covers `beforeLoad`'s wiring itself (see Step 5) or `RootDocument`'s route-context read directly — both are accepted gaps in this repo's established testing pattern for route-level wiring.
+
+- [ ] **Step 5: Manually verify against a real dev server**
+
+```bash
+cd app
+pnpm dev &
+sleep 5
+
+# Default locale, no prefix: plain 200
+curl -s -o /dev/null -w "%{http_code}\n" http://localhost:3000/
+
+# Non-default locale prefix on the public route: still 200, locale-stripped path resolves
+curl -s -o /dev/null -w "%{http_code}\n" http://localhost:3000/zh-TW/
+
+# Unauthenticated visit to a locale-prefixed protected-looking path — the ABAC gate
+# only classifies '/sign-in'/'/sign-up' as auth routes and '/' as public; anything else
+# falls to the implicit-deny branch. /dashboard is registered (sub-project 2) and
+# unauthenticated, so this must 307 to the SAME locale's /sign-in — the redirect-prefix
+# hazard this plan's design explicitly set out to avoid:
+curl -s -i http://localhost:3000/zh-TW/dashboard | grep -i "^location\|^HTTP"
+
+# Accept-Language negotiation on the unprefixed root:
+curl -s -o /dev/null -w "%{http_code}\n" -H "Accept-Language: ko-KR,en;q=0.5" http://localhost:3000/
+
+kill %1
+```
+
+Expected: first three all 200 (or the dashboard curl's `-i` shows a 307 with `location: /zh-TW/sign-in` — the locale prefix must survive the redirect chain). This confirms the plan's core design goal (no next-intl-style redirect-ordering hazard) empirically, on the real integrated code, not just in `build-locale.test.ts`'s isolated unit tests.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add app/src/routes/__root.tsx app/src/app/root-document.tsx
+git commit -m "feat: wire locale resolution into __root.tsx and mount the i18next provider"
+```
+
+---
+
+### Task 3.5: Make locale-prefixed paths actually match a route
+
+**Added mid-implementation, not in the original plan.** Task 3 wired locale *resolution* into
+`beforeLoad` (which locale to use, and stripping the prefix before handing the path to the ABAC
+check), but never made TanStack Router's own route tree aware that `/zh-TW/dashboard` and
+`/dashboard` should render the same page. Confirmed directly against a real dev server before
+writing this task: `GET /zh-TW` → 404 (no route matches); `GET /zh-TW/dashboard` unauthenticated
+→ 307 to `/zh-TW/sign-in` only because the ABAC redirect fires from `__root__`'s `beforeLoad`
+*before* leaf-route matching is ever attempted — this accident masked the gap in that one specific
+case. Any locale-prefixed visit the ABAC layer doesn't redirect away (an authenticated user
+visiting `/zh-TW/dashboard`, or anyone visiting the public `/zh-TW/`) 404s instead of rendering.
+forgekit's own routing has a literal `app/[locale]/...` dynamic segment in its file structure —
+this plan ported locale *resolution* but never re-created the equivalent structural piece in
+TanStack Router's file-based routing.
+
+**Files:**
+- Move: `app/src/routes/index.tsx`, `app/src/routes/dashboard.tsx`, `app/src/routes/sign-in.tsx`,
+  `app/src/routes/sign-up.tsx` — exact destination determined by Step 1 below.
+- Modify: `app/src/routeTree.gen.ts` (regenerated, not hand-edited).
+
+**Interfaces:**
+- Consumes: nothing new — the four moved routes' own `beforeLoad`/`component` logic is untouched,
+  only their file location (and each file's own `createFileRoute(...)` path argument, if the
+  framework's convention requires it to match) changes.
+- Produces: every existing route becomes reachable both unprefixed and under any of the three
+  supported locale prefixes — Tasks 5/7's `LocaleSwitcher`/manual dev-server verification steps
+  depend on this working, since they navigate to and curl locale-prefixed URLs expecting a real
+  page, not a 404.
+
+This task is scoped differently from the rest of this plan: the exact file/folder naming
+convention TanStack Start's file-based router expects for an optional path segment isn't yet
+confirmed against this specific installed version — only that the underlying mechanism exists
+(`@tanstack/router-core@1.171.30`'s own type definitions document optional dynamic segments via
+`{-$param}` syntax). Investigate the exact convention directly against this repo's installed
+packages and this app's existing routing setup (check `app/src/router.tsx`,
+`app/src/routeTree.gen.ts`'s current generated shape, and any TanStack Start/Router documentation
+bundled in `node_modules` or available via the framework's own type definitions/JSDoc) before
+moving any file — do not guess at a folder name and hope the codegen accepts it.
+
+- [ ] **Step 1: Determine the exact optional-segment file convention**
+
+Read this app's `app/src/router.tsx` and current `app/src/routeTree.gen.ts` to understand how
+routes are currently generated. Check `app/package.json`'s `generate-routes` script
+(`tsr generate`) and whether a Vite plugin also auto-generates routes at dev/build time (check
+`app/vite.config.ts` for a `@tanstack/router-plugin`/`tanstackStart` plugin entry). Determine the
+literal folder/file naming pattern this version expects for an optional dynamic segment (likely a
+folder literally named `{-$locale}` under `routes/`, but confirm — do not assume without checking
+the plugin's own source or a working example, since a wrong guess here fails silently at the
+codegen step, not at compile time).
+
+- [ ] **Step 2: Move the four routes under the optional segment**
+
+Move `index.tsx`, `dashboard.tsx`, `sign-in.tsx`, `sign-up.tsx` into the location Step 1
+determined. Update each file's own `createFileRoute('...')` path argument if the convention
+requires it to match the new location exactly (check whether the framework auto-derives this or
+requires manual updating — some TanStack Router setups auto-fix this via their Vite
+plugin/codegen, others require the string literal to match by hand). Leave every route's own
+`beforeLoad`/`component` body completely untouched — this task only changes *where* these routes
+live and what paths route to them, never their logic.
+
+- [ ] **Step 3: Regenerate the route tree**
+
+```bash
+cd app
+pnpm generate-routes
+```
+
+If this app also auto-regenerates via a Vite plugin during `pnpm dev`/`pnpm build`, the manual
+command may be redundant but should still run cleanly and produce the same result — run it anyway,
+to catch any discrepancy between the manual codegen path and the dev-server's own regeneration.
+
+- [ ] **Step 4: Run the full check suite**
+
+```bash
+cd app
+pnpm check
+pnpm lint
+pnpm lint:fsd
+pnpm test
+pnpm build
+```
+
+Expected: all pass/succeed. `pnpm test` should show the same 74/74 as before this task — nothing
+here should need a new or modified test file, since no route's own logic changed, only its
+location in the tree.
+
+- [ ] **Step 5: Verify against a real dev server — this is the actual gate, not Step 4**
+
+```bash
+cd app
+pnpm dev &
+sleep 5
+
+# Public root, unprefixed and prefixed — both must render the real page, not 404
+curl -s -o /dev/null -w "unprefixed root: %{http_code}\n" http://localhost:3000/
+curl -s -o /dev/null -w "zh-TW root: %{http_code}\n" http://localhost:3000/zh-TW
+
+# Unauthenticated dashboard, unprefixed and prefixed — both must redirect to sign-in,
+# in the SAME locale
+curl -s -i http://localhost:3000/dashboard | grep -i "^location\|^HTTP"
+curl -s -i http://localhost:3000/ko-KR/dashboard | grep -i "^location\|^HTTP"
+
+# Sign up a real user, then visit the AUTHENTICATED dashboard under a locale prefix —
+# this is the specific case Task 3's own manual check never exercised, and the one that
+# actually proves this task's fix (an authenticated visit has no redirect to hide behind;
+# the router must genuinely match the locale-prefixed path)
+curl -s -i -X POST http://localhost:3000/api/auth/sign-up/email \
+  -H "Content-Type: application/json" \
+  -d '{"email":"locale-route-verify@example.com","password":"locale-route-verify-pw","name":"Locale Route Verify"}' \
+  > /tmp/locale-route-verify-signup.txt
+COOKIE=$(grep -o 'forgekit-tanstack-start.session_token=[^;]*' /tmp/locale-route-verify-signup.txt)
+curl -s http://localhost:3000/zh-TW/dashboard -H "Cookie: $COOKIE" | grep -o "Welcome"
+
+rm -f /tmp/locale-route-verify-signup.txt
+kill %1
+```
+
+Expected: both root checks return 200; both dashboard redirects carry their own locale prefix
+(`location: /sign-in` and `location: /ko-KR/sign-in` respectively); the authenticated,
+locale-prefixed dashboard visit's response body contains `Welcome` — proving a real page renders
+under a locale prefix with no redirect to hide behind. If any of these fail, the chosen file
+convention from Step 1 was wrong — go back and find the correct one; do not report done against a
+failing verification.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add -A
+git commit -m "fix: make locale-prefixed paths match a real route
+
+Task 3 wired locale resolution into beforeLoad but never made
+TanStack Router's own route tree aware of locale-prefixed paths as
+real, matchable routes -- only unprefixed paths rendered; a
+locale-prefixed visit that the ABAC layer didn't redirect away (an
+authenticated user, or any public page) 404d. Restructures the
+existing index/dashboard/sign-in/sign-up routes under an optional
+path segment so both forms resolve to the same page."
+```
+
+---
+
+### Task 4: `RadialMenu` — generic shared UI primitive
+
+**Files:**
+- Create: `app/src/shared/ui/radial-menu.tsx`
+- Test: `app/src/shared/ui/radial-menu.test.tsx`
+
+**Interfaces:**
+- Consumes: `Button` (`#/shared/ui/button`), `colors`/`radius` (`#/shared/lib/tokens.stylex`) — all pre-existing.
+- Produces: `RadialMenu`, `RadialMenuItem` (props type) — Task 5 (`LocaleSwitcher`) builds on this.
+
+- [ ] **Step 1: Write the failing tests**
+
+Create `app/src/shared/ui/radial-menu.test.tsx`:
+
+```tsx
+import { cleanup, render, screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+
+import { RadialMenu } from './radial-menu'
+
+afterEach(() => {
+  cleanup()
+})
+
+describe('RadialMenu', () => {
+  it('renders the toggle and one button per item, closed by default', () => {
+    render(
+      <RadialMenu
+        items={[{ label: 'A' }, { label: 'B' }, { label: 'C' }]}
+        toggleAriaLabel="Open menu"
+      />,
+    )
+    expect(screen.getByRole('button', { name: 'Open menu' })).toBeInTheDocument()
+    expect(screen.getAllByRole('button')).toHaveLength(4) // toggle + 3 items
+  })
+
+  it('opens on click and fires an item onClick, then closes', async () => {
+    const onClick = vi.fn()
+    render(
+      <RadialMenu
+        items={[{ label: 'A', onClick }, { label: 'B' }]}
+        toggleAriaLabel="Open menu"
+        trigger="click"
+      />,
+    )
+
+    await userEvent.click(screen.getByRole('button', { name: 'Open menu' }))
+    await userEvent.click(screen.getByRole('button', { name: 'A' }))
+
+    expect(onClick).toHaveBeenCalledOnce()
+  })
+
+  it('opens on hover when trigger is "hover"', async () => {
+    render(
+      <RadialMenu
+        items={[{ label: 'A' }]}
+        toggleAriaLabel="Open menu"
+        trigger="hover"
+      />,
+    )
+
+    const toggle = screen.getByRole('button', { name: 'Open menu' })
+    await userEvent.hover(toggle)
+
+    expect(screen.getByRole('button', { name: 'A' })).toBeInTheDocument()
+  })
+
+  it('does not open on hover when trigger is "click"', async () => {
+    render(
+      <RadialMenu
+        items={[{ label: 'A' }]}
+        toggleAriaLabel="Open menu"
+        trigger="click"
+      />,
+    )
+
+    await userEvent.hover(screen.getByRole('button', { name: 'Open menu' }))
+
+    // The item button exists in the DOM (always mounted, opacity-animated) but isn't
+    // interactive — assert the toggle itself never flips to its "open" state instead.
+    expect(screen.getByRole('button', { name: 'Open menu' })).not.toHaveAttribute(
+      'data-open',
+      'true',
+    )
+  })
+})
+```
+
+- [ ] **Step 2: Run the tests to verify they fail**
+
+```bash
+cd app
+pnpm test radial-menu.test.tsx
+```
+
+Expected: FAIL — `radial-menu.tsx` doesn't exist yet.
+
+- [ ] **Step 3: Implement `RadialMenu`**
+
+Create `app/src/shared/ui/radial-menu.tsx`, porting forgekit's real `components/radial-menu.tsx` (same rotate+translateX circular-placement technique, same prop API) onto this repo's `Button` and StyleX tokens instead of forgekit's shadcn `Button` and Tailwind classes:
+
+```tsx
+import { create, props as stylexProps } from '@stylexjs/stylex'
+import { Circle } from 'lucide-react'
+import { motion } from 'motion/react'
+import type { ReactNode } from 'react'
+import { useState } from 'react'
+
+import { radius } from '#/shared/lib/tokens.stylex'
+import { Button } from './button'
+
+const ORBIT_RADIUS = 72
+
+const styles = create({
+  container: {
+    height: '2.25rem',
+    position: 'relative',
+    width: '2.25rem',
+  },
+  toggle: {
+    borderRadius: radius.full,
+    position: 'relative',
+    zIndex: 60,
+  },
+  itemWrapper: {
+    left: '50%',
+    position: 'absolute',
+    top: '50%',
+    transform: 'translate(-50%, -50%)',
+    zIndex: 50,
+  },
+  itemInner: {
+    transform: 'translate(-50%, -50%)',
+  },
+  item: {
+    borderRadius: radius.full,
+    height: '2rem',
+    minHeight: '2rem',
+    minWidth: '2rem',
+    width: '2rem',
+  },
+})
+
+export interface RadialMenuItem {
+  label: ReactNode
+  onClick?: () => void
+}
+
+export interface RadialMenuProps {
+  arc?: number
+  startAngle?: number
+  trigger?: 'hover' | 'click' | 'both'
+  angles?: number[]
+  items: RadialMenuItem[]
+  toggle?: ReactNode
+  toggleAriaLabel?: string
+  radius?: number
+}
+
+/**
+ * Ported from forgekit's real components/radial-menu.tsx — a generic, reusable radial
+ * menu, not invented for this port. The circular placement is a rotate-then-translate
+ * CSS composition trick: each item's outer wrapper is rotated to its target angle while
+ * pinned to the toggle's center, then a plain inner div pushes it outward by a constant
+ * radius along its own (now-rotated) local X axis — guaranteeing every item sits exactly
+ * `radius` px from center regardless of angle, with no explicit sin/cos math. A second,
+ * inner counter-rotation cancels the parent's rotation so the item's content renders
+ * upright. Confirmed against forgekit's original before porting: no third-party geometry
+ * dependency, just this transform-composition identity plus Motion's spring interpolation.
+ */
+export function RadialMenu({
+  arc = 120,
+  startAngle = 210,
+  trigger = 'both',
+  angles,
+  items,
+  toggle,
+  toggleAriaLabel = 'Open menu',
+  radius: radiusProp,
+}: RadialMenuProps) {
+  const [open, setOpen] = useState(false)
+
+  const hoverEnabled = trigger !== 'click'
+  const clickEnabled = trigger !== 'hover'
+
+  const step = items.length > 1 ? arc / (items.length - 1) : 0
+  const anglesList =
+    angles && angles.length === items.length
+      ? angles
+      : items.map((_, i) => startAngle + step * i)
+  const orbitRadius = typeof radiusProp === 'number' ? radiusProp : ORBIT_RADIUS
+
+  const containerProps = stylexProps(styles.container)
+  const toggleProps = stylexProps(styles.toggle)
+  const itemWrapperProps = stylexProps(styles.itemWrapper)
+  const itemInnerProps = stylexProps(styles.itemInner)
+  const itemProps = stylexProps(styles.item)
+
+  return (
+    <div className={containerProps.className} style={containerProps.style}>
+      <Button
+        variant="ghost"
+        size="icon"
+        aria-label={toggleAriaLabel}
+        data-open={open}
+        className={toggleProps.className}
+        style={toggleProps.style}
+        onClick={() => {
+          if (clickEnabled) setOpen((value) => !value)
+        }}
+        onMouseEnter={() => {
+          if (hoverEnabled) setOpen(true)
+        }}
+        onMouseLeave={() => {
+          if (hoverEnabled) setOpen(false)
+        }}
+      >
+        {toggle ?? <Circle />}
+      </Button>
+
+      {items.map((item, index) => {
+        const angle = anglesList[index] ?? startAngle
+        return (
+          // eslint-disable-next-line react/no-array-index-key -- items are positional, not identity-bearing
+          <motion.div
+            key={index}
+            className={itemWrapperProps.className}
+            style={{ ...itemWrapperProps.style, pointerEvents: open ? 'auto' : 'none' }}
+            initial={{ rotate: 0, opacity: 0 }}
+            animate={open ? { rotate: angle, opacity: 1 } : { rotate: 0, opacity: 0 }}
+            transition={{ type: 'spring', stiffness: 360, damping: 26, delay: index * 0.05 }}
+          >
+            <div style={{ transform: `translateX(${orbitRadius}px)` }}>
+              <motion.div
+                className={itemInnerProps.className}
+                style={{ ...itemInnerProps.style, rotate: -angle }}
+              >
+                <Button
+                  variant="outline"
+                  className={itemProps.className}
+                  style={itemProps.style}
+                  onClick={() => {
+                    item.onClick?.()
+                    setOpen(false)
+                  }}
+                >
+                  {item.label}
+                </Button>
+              </motion.div>
+            </div>
+          </motion.div>
+        )
+      })}
+    </div>
+  )
+}
+```
+
+- [ ] **Step 4: Run the tests to verify they pass**
+
+```bash
+cd app
+pnpm test radial-menu.test.tsx
+```
+
+Expected: PASS, all 4 cases.
+
+- [ ] **Step 5: Manual visual spike — `motion` + StyleX combination**
+
+This plan's spec flags `motion` + StyleX as an untested combination in this repo. Before trusting the automated tests alone, run `pnpm dev`, visit any page that will mount a `RadialMenu` (Task 5 wires the real consumer — for this spike, temporarily render `<RadialMenu items={[{label:'A'},{label:'B'},{label:'C'}]} />` directly inside `pages/sign-in/ui/sign-in-page.tsx`, check it opens/animates correctly in a real browser, then remove the temporary render). Confirm: the toggle is a visible circle, clicking fans out three circular items with a spring animation, each item's label renders upright (not tilted), items collapse back on click. Note any visual issue in the task report; do not silently proceed past a broken animation.
+
+- [ ] **Step 6: Run the full check suite**
+
+```bash
+cd app
+pnpm check
+pnpm lint
+pnpm lint:fsd
+pnpm test
+pnpm build
+```
+
+Expected: all pass/succeed.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add app/src/shared/ui/radial-menu.tsx app/src/shared/ui/radial-menu.test.tsx
+git commit -m "feat: add RadialMenu, ported from forgekit's generic radial-menu component"
+```
+
+---
+
+### Task 5: `LocaleSwitcher`
+
+**Files:**
+- Create: `app/src/shared/i18n/ui/locale-switcher.tsx`
+- Test: `app/src/shared/i18n/ui/locale-switcher.test.tsx`
+
+**Interfaces:**
+- Consumes: `RadialMenu`, `RadialMenuItem` (Task 4); `SUPPORTED_LOCALES`, `LOCALE_COOKIE`, `Locale` (Task 1).
+- Produces: `LocaleSwitcher` (no props) — Task 7 mounts it on the sign-in/sign-up cards.
+
+- [ ] **Step 1: Write the failing tests**
+
+Create `app/src/shared/i18n/ui/locale-switcher.test.tsx`:
+
+```tsx
+import type * as ReactRouter from '@tanstack/react-router'
+import { cleanup, render, screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+
+import { LocaleSwitcher } from './locale-switcher'
+
+const navigate = vi.fn()
+
+vi.mock('@tanstack/react-router', async (importOriginal) => {
+  const actual = await importOriginal<typeof ReactRouter>()
+  return { ...actual, useRouter: () => ({ navigate }) }
+})
+
+afterEach(() => {
+  cleanup()
+  navigate.mockReset()
+  document.cookie = 'forgekit-tanstack-start.locale=; expires=Thu, 01 Jan 1970 00:00:00 UTC'
+})
+
+describe('LocaleSwitcher', () => {
+  it('renders one item per supported locale', async () => {
+    render(<LocaleSwitcher />)
+    await userEvent.click(screen.getByRole('button', { name: 'Change language' }))
+
+    expect(screen.getByRole('button', { name: 'EN' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '中' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '한' })).toBeInTheDocument()
+  })
+
+  it('navigates to the same path with the new locale prefix on click', async () => {
+    Object.defineProperty(window, 'location', {
+      value: { pathname: '/sign-in' },
+      writable: true,
+    })
+
+    render(<LocaleSwitcher />)
+    await userEvent.click(screen.getByRole('button', { name: 'Change language' }))
+    await userEvent.click(screen.getByRole('button', { name: '中' }))
+
+    expect(navigate).toHaveBeenCalledWith({ to: '/zh-TW/sign-in' })
+  })
+
+  it('writes the locale cookie on switch', async () => {
+    Object.defineProperty(window, 'location', {
+      value: { pathname: '/sign-in' },
+      writable: true,
+    })
+
+    render(<LocaleSwitcher />)
+    await userEvent.click(screen.getByRole('button', { name: 'Change language' }))
+    await userEvent.click(screen.getByRole('button', { name: '한' }))
+
+    expect(document.cookie).toContain('forgekit-tanstack-start.locale=ko-KR')
+  })
+})
+```
+
+- [ ] **Step 2: Run the tests to verify they fail**
+
+```bash
+cd app
+pnpm test locale-switcher.test.tsx
+```
+
+Expected: FAIL — `locale-switcher.tsx` doesn't exist yet.
+
+- [ ] **Step 3: Implement `LocaleSwitcher`**
+
+Create `app/src/shared/i18n/ui/locale-switcher.tsx`:
+
+```tsx
+import { useRouter } from '@tanstack/react-router'
+import { Languages } from 'lucide-react'
+
+import { RadialMenu } from '#/shared/ui/radial-menu'
+import type { RadialMenuItem } from '#/shared/ui/radial-menu'
+import { LOCALE_COOKIE, SUPPORTED_LOCALES } from '../config'
+import type { Locale } from '../config'
+import { withLocalePrefix, buildLocale } from '../build-locale'
+
+const LOCALE_LABELS: Record<Locale, string> = {
+  en: 'EN',
+  'zh-TW': '中',
+  'ko-KR': '한',
+}
+
+/**
+ * Ported from forgekit's real components/locale-switcher.tsx — reads the current path,
+ * strips any existing locale prefix, and re-prefixes it for the chosen locale, matching
+ * the "as-needed" convention (no prefix for the default locale).
+ */
+export function LocaleSwitcher() {
+  const router = useRouter()
+
+  const handleLocaleChange = (locale: Locale) => {
+    const { path: pathWithoutPrefix } = buildLocale(window.location.pathname, undefined, undefined)
+    document.cookie = `${LOCALE_COOKIE}=${locale}; path=/; max-age=31536000`
+    router.navigate({ to: withLocalePrefix(pathWithoutPrefix, locale) })
+  }
+
+  const items: RadialMenuItem[] = SUPPORTED_LOCALES.map((locale) => ({
+    label: LOCALE_LABELS[locale],
+    onClick: () => handleLocaleChange(locale),
+  }))
+
+  return (
+    <RadialMenu
+      items={items}
+      toggle={<Languages />}
+      toggleAriaLabel="Change language"
+      trigger="click"
+      arc={75}
+      startAngle={340}
+    />
+  )
+}
+```
+
+- [ ] **Step 4: Run the tests to verify they pass**
+
+```bash
+cd app
+pnpm test locale-switcher.test.tsx
+```
+
+Expected: PASS, all 3 cases.
+
+- [ ] **Step 5: Run the full check suite**
+
+```bash
+cd app
+pnpm check
+pnpm lint
+pnpm lint:fsd
+pnpm test
+pnpm build
+```
+
+Expected: all pass/succeed.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add app/src/shared/i18n/ui
+git commit -m "feat: add LocaleSwitcher built on RadialMenu"
+```
+
+---
+
+### Task 6: Translated validation-schema factories
+
+**Files:**
+- Modify: `app/src/features/auth/model/sign-in-schema.ts`
+- Modify: `app/src/features/auth/model/sign-up-schema.ts`
+- Modify: `app/src/features/auth/model/sign-in-schema.test.ts`
+- Modify: `app/src/features/auth/model/sign-up-schema.test.ts`
+
+**Interfaces:**
+- Consumes: `TFunction` type from `i18next` (Task 1's dependency).
+- Produces: `createSignInSchema(t: TFunction<'validation'>): typeof signInSchema`, `createSignUpSchema(t: TFunction<'validation'>): typeof signUpSchema` — Task 7 calls both. The existing plain `signInSchema`/`signUpSchema` exports are untouched, so every current caller keeps working unchanged through this task.
+
+- [ ] **Step 1: Write the failing tests**
+
+Add to the end of `app/src/features/auth/model/sign-in-schema.test.ts` (keep the existing three tests above this):
+
+```typescript
+import type { TFunction } from 'i18next'
+
+import { createSignInSchema } from './sign-in-schema'
+
+const stubT = ((key: string, options?: { min?: number }) =>
+  options ? `${key}:${options.min}` : key) as unknown as TFunction<'validation'>
+
+describe('createSignInSchema', () => {
+  it('accepts a valid sign-in', () => {
+    const result = createSignInSchema(stubT).safeParse({
+      email: 'person@example.com',
+      password: 'abcd1234',
+    })
+    expect(result.success).toBe(true)
+  })
+
+  it('uses the translated message for an invalid email', () => {
+    const result = createSignInSchema(stubT).safeParse({
+      email: 'not-an-email',
+      password: 'abcd1234',
+    })
+    expect(result.success).toBe(false)
+    expect(result.error?.issues[0]?.message).toBe('authenticate.email.invalid')
+  })
+
+  it('uses the translated, interpolated message for a short password', () => {
+    const result = createSignInSchema(stubT).safeParse({
+      email: 'person@example.com',
+      password: 'abc123',
+    })
+    expect(result.success).toBe(false)
+    expect(result.error?.issues[0]?.message).toBe('authenticate.password.min:8')
+  })
+})
+```
+
+Add to the end of `app/src/features/auth/model/sign-up-schema.test.ts`:
+
+```typescript
+import type { TFunction } from 'i18next'
+
+import { createSignUpSchema } from './sign-up-schema'
+
+const stubT = ((key: string, options?: { min?: number }) =>
+  options ? `${key}:${options.min}` : key) as unknown as TFunction<'validation'>
+
+describe('createSignUpSchema', () => {
+  it('accepts a valid registration', () => {
+    expect(createSignUpSchema(stubT).safeParse(valid).success).toBe(true)
+  })
+
+  it('uses the translated message for mismatched passwords', () => {
+    const result = createSignUpSchema(stubT).safeParse({
+      ...valid,
+      confirmPassword: 'different1',
+    })
+    expect(result.success).toBe(false)
+    expect(result.error?.issues[0]?.message).toBe('authenticate.confirmPassword.confirm')
+  })
+
+  it('uses the translated message for an empty name', () => {
+    const result = createSignUpSchema(stubT).safeParse({ ...valid, name: '' })
+    expect(result.success).toBe(false)
+    expect(result.error?.issues[0]?.message).toBe('authenticate.name.required')
+  })
+})
+```
+
+- [ ] **Step 2: Run the tests to verify they fail**
+
+```bash
+cd app
+pnpm test sign-in-schema.test.ts sign-up-schema.test.ts
+```
+
+Expected: FAIL — `createSignInSchema`/`createSignUpSchema` don't exist yet.
+
+- [ ] **Step 3: Implement the factories**
+
+Modify `app/src/features/auth/model/sign-in-schema.ts` — add the factory below the existing plain schema, don't touch the plain schema itself:
+
+```typescript
+import type { TFunction } from 'i18next'
+import { z } from 'zod'
+
+export const signInSchema = z.object({
+  email: z.email('Invalid email address').min(1, 'Email is required'),
+  password: z.string().min(8, 'Password must be at least 8 characters'),
+})
+
+/**
+ * The i18n-aware counterpart of signInSchema, matching forgekit's createSignInSchema(t)
+ * shape exactly. sign-in-form.tsx (Task 7) switches to this; the plain schema above stays
+ * as the non-translated fallback/reference shape sub-project 2 originally shipped.
+ */
+export const createSignInSchema = (t: TFunction<'validation'>) =>
+  signInSchema.extend({
+    email: z
+      .email(t('authenticate.email.invalid'))
+      .min(1, t('authenticate.email.required')),
+    password: z
+      .string()
+      .min(8, t('authenticate.password.min', { min: 8 })),
+  })
+
+export type SignInInput = z.infer<typeof signInSchema>
+```
+
+Modify `app/src/features/auth/model/sign-up-schema.ts`:
+
+```typescript
+import type { TFunction } from 'i18next'
+import { z } from 'zod'
+
+const passwordsMatch = (data: { password: string; confirmPassword: string }) =>
+  data.password === data.confirmPassword
+
+export const signUpSchema = z
+  .object({
+    name: z.string().min(1, 'Name is required'),
+    email: z.email('Invalid email address').min(1, 'Email is required'),
+    password: z.string().min(8, 'Password must be at least 8 characters'),
+    confirmPassword: z.string('Confirm password is required'),
+  })
+  .refine(passwordsMatch, {
+    path: ['confirmPassword'],
+    message: 'Passwords must match',
+  })
+
+/**
+ * The i18n-aware counterpart of signUpSchema, matching forgekit's createSignUpSchema(t)
+ * shape exactly. sign-up-form.tsx (Task 7) switches to this; the plain schema above stays
+ * as the non-translated fallback/reference shape sub-project 2 originally shipped.
+ */
+export const createSignUpSchema = (t: TFunction<'validation'>) =>
+  z
+    .object({
+      name: z.string().min(1, t('authenticate.name.required')),
+      email: z
+        .email(t('authenticate.email.invalid'))
+        .min(1, t('authenticate.email.required')),
+      password: z
+        .string()
+        .min(8, t('authenticate.password.min', { min: 8 })),
+      confirmPassword: z.string(t('authenticate.confirmPassword.required')),
+    })
+    .refine(passwordsMatch, {
+      path: ['confirmPassword'],
+      message: t('authenticate.confirmPassword.confirm'),
+    })
+
+export type SignUpInput = z.infer<typeof signUpSchema>
+```
+
+- [ ] **Step 4: Run the tests to verify they pass**
+
+```bash
+cd app
+pnpm test sign-in-schema.test.ts sign-up-schema.test.ts
+```
+
+Expected: PASS, all cases (3 original + 3 new for sign-in; 5 original + 3 new for sign-up).
+
+- [ ] **Step 5: Run the full check suite**
+
+```bash
+cd app
+pnpm check
+pnpm lint
+pnpm lint:fsd
+pnpm test
+```
+
+Expected: all pass. `signInSchema`/`signUpSchema`'s existing callers (`sign-in-form.tsx`/`sign-up-form.tsx`, untouched by this task) keep working exactly as before — this task is purely additive.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add app/src/features/auth/model/sign-in-schema.ts app/src/features/auth/model/sign-in-schema.test.ts app/src/features/auth/model/sign-up-schema.ts app/src/features/auth/model/sign-up-schema.test.ts
+git commit -m "feat: add i18n-aware factory shape to sign-in/sign-up validation schemas"
+```
+
+---
+
+### Task 7: Wire translations + `LocaleSwitcher` into the sign-in/sign-up forms
+
+**Files:**
+- Modify: `app/src/features/auth/ui/sign-in-form.tsx`
+- Modify: `app/src/features/auth/ui/sign-up-form.tsx`
+- Modify: `app/src/features/auth/ui/sign-in-form.test.tsx`
+- Modify: `app/src/features/auth/ui/sign-up-form.test.tsx`
+
+**Interfaces:**
+- Consumes: `createSignInSchema`, `createSignUpSchema` (Task 6); `LocaleSwitcher` (Task 5); `useTranslation` from `react-i18next` (Task 1's dependency).
+- Produces: nothing later in this plan consumes — this is the last UI-facing task; Task 8 only verifies.
+
+- [ ] **Step 1: Update `sign-in-form.tsx`**
+
+Current content (confirmed against the repo before writing this task):
+
+```tsx
+import { zodResolver } from '@hookform/resolvers/zod'
+import { useForm } from 'react-hook-form'
+
+import { Button } from '#/shared/ui/button'
+import { Card, CardContent, CardHeader, CardTitle } from '#/shared/ui/card'
+import { Field, FieldDescription, FieldGroup, FieldLabel } from '#/shared/ui/field'
+import { Input } from '#/shared/ui/input'
+
+import { useSignIn } from '../model/use-sign-in'
+import { useSocialSignIn } from '../model/use-social-sign-in'
+import { signInSchema } from '../model/sign-in-schema'
+import type { SignInInput } from '../model/sign-in-schema'
+
+export function SignInForm() {
+  const signIn = useSignIn()
+  const socialSignIn = useSocialSignIn()
+
+  const form = useForm<SignInInput>({
+    resolver: zodResolver(signInSchema),
+    defaultValues: { email: '', password: '' },
+  })
+  // ...unchanged JSX below
+```
+
+Replace the imports and the schema/resolver wiring, and mount `LocaleSwitcher` beside the social sign-in button:
+
+```tsx
+import { zodResolver } from '@hookform/resolvers/zod'
+import { useForm } from 'react-hook-form'
+import { useTranslation } from 'react-i18next'
+
+import { Button } from '#/shared/ui/button'
+import { Card, CardContent, CardHeader, CardTitle } from '#/shared/ui/card'
+import { Field, FieldDescription, FieldGroup, FieldLabel } from '#/shared/ui/field'
+import { Input } from '#/shared/ui/input'
+import { LocaleSwitcher } from '#/shared/i18n/ui/locale-switcher'
+
+import { useSignIn } from '../model/use-sign-in'
+import { useSocialSignIn } from '../model/use-social-sign-in'
+import { createSignInSchema } from '../model/sign-in-schema'
+import type { SignInInput } from '../model/sign-in-schema'
+
+export function SignInForm() {
+  const signIn = useSignIn()
+  const socialSignIn = useSocialSignIn()
+  const { t } = useTranslation('validation')
+
+  const form = useForm<SignInInput>({
+    resolver: zodResolver(createSignInSchema(t)),
+    defaultValues: { email: '', password: '' },
+  })
+```
+
+And add `<LocaleSwitcher />` as a sibling of the existing social sign-in `Field`, right after `<CardTitle>Sign in</CardTitle>` closes (inside `CardHeader`, matching forgekit's placement of its switcher beside the card's own controls):
+
+```tsx
+      <CardHeader>
+        <CardTitle>Sign in</CardTitle>
+        <LocaleSwitcher />
+      </CardHeader>
+```
+
+Everything else in the file (the rest of the `<CardContent>` JSX, `onSubmit`, the closing braces) stays exactly as it is today.
+
+- [ ] **Step 2: Update `sign-up-form.tsx`**
+
+Same pattern. Current imports/wiring:
+
+```tsx
+import { zodResolver } from '@hookform/resolvers/zod'
+import { useForm } from 'react-hook-form'
+
+import { Button } from '#/shared/ui/button'
+import { Card, CardContent, CardHeader, CardTitle } from '#/shared/ui/card'
+import { Field, FieldDescription, FieldGroup, FieldLabel } from '#/shared/ui/field'
+import { Input } from '#/shared/ui/input'
+
+import { useSignUp } from '../model/use-sign-up'
+import { signUpSchema } from '../model/sign-up-schema'
+import type { SignUpInput } from '../model/sign-up-schema'
+
+export function SignUpForm() {
+  const signUp = useSignUp()
+
+  const form = useForm<SignUpInput>({
+    resolver: zodResolver(signUpSchema),
+    defaultValues: { name: '', email: '', password: '', confirmPassword: '' },
+  })
+```
+
+Replace with:
+
+```tsx
+import { zodResolver } from '@hookform/resolvers/zod'
+import { useForm } from 'react-hook-form'
+import { useTranslation } from 'react-i18next'
+
+import { Button } from '#/shared/ui/button'
+import { Card, CardContent, CardHeader, CardTitle } from '#/shared/ui/card'
+import { Field, FieldDescription, FieldGroup, FieldLabel } from '#/shared/ui/field'
+import { Input } from '#/shared/ui/input'
+import { LocaleSwitcher } from '#/shared/i18n/ui/locale-switcher'
+
+import { useSignUp } from '../model/use-sign-up'
+import { createSignUpSchema } from '../model/sign-up-schema'
+import type { SignUpInput } from '../model/sign-up-schema'
+
+export function SignUpForm() {
+  const signUp = useSignUp()
+  const { t } = useTranslation('validation')
+
+  const form = useForm<SignUpInput>({
+    resolver: zodResolver(createSignUpSchema(t)),
+    defaultValues: { name: '', email: '', password: '', confirmPassword: '' },
+  })
+```
+
+And add `<LocaleSwitcher />` beside the title:
+
+```tsx
+      <CardHeader>
+        <CardTitle>Create an account</CardTitle>
+        <LocaleSwitcher />
+      </CardHeader>
+```
+
+Everything else in the file stays exactly as it is today.
+
+- [ ] **Step 3: Update the two existing test assertions that assumed English hardcoded copy**
+
+`sign-in-form.test.tsx`'s second test currently asserts `/invalid email address/i` — the real `en` validation copy for that key is `"Please enter a valid email address"`, not `"Invalid email address"`. Update it:
+
+```typescript
+    expect(await screen.findByText(/valid email address/i)).toBeInTheDocument()
+```
+
+`sign-up-form.test.tsx`'s second test currently asserts `/passwords must match/i` — the real `en` validation copy for that key is `"Password not matched"`. Update it:
+
+```typescript
+    expect(await screen.findByText(/password not matched/i)).toBeInTheDocument()
+```
+
+No other assertion in either file changes — every other string this test checks (button names, labels) comes from hardcoded JSX text, not the schema's error messages, and this task doesn't touch that JSX text.
+
+- [ ] **Step 4: Run the tests to verify they pass**
+
+```bash
+cd app
+pnpm test sign-in-form.test.tsx sign-up-form.test.tsx
+```
+
+Expected: PASS, all cases (including the two updated assertions).
+
+- [ ] **Step 5: Run the full check suite**
+
+```bash
+cd app
+pnpm check
+pnpm lint
+pnpm lint:fsd
+pnpm test
+pnpm build
+```
+
+Expected: all pass/succeed.
+
+- [ ] **Step 6: Manually verify against a real dev server**
+
+```bash
+cd app
+pnpm dev &
+sleep 5
+
+curl -s http://localhost:3000/sign-in | grep -o "Sign in" # English default
+curl -s http://localhost:3000/zh-TW/sign-in | grep -o "登入" # zh-TW LocaleSwitcher item label + page still renders
+
+kill %1
+```
+
+Expected: both greps find a match — confirms the form renders in the requested locale end-to-end (SSR, not just the isolated component tests).
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add app/src/features/auth/ui/sign-in-form.tsx app/src/features/auth/ui/sign-in-form.test.tsx app/src/features/auth/ui/sign-up-form.tsx app/src/features/auth/ui/sign-up-form.test.tsx
+git commit -m "feat: wire translated validation and LocaleSwitcher into sign-in/sign-up forms"
+```
+
+---
+
+### Task 7.5: Translate the rest of the visible UI — titles, labels, buttons, toasts
+
+**Added mid-implementation, not in the original plan.** Task 7 only wired the `validation`
+namespace into the schema resolvers. Confirmed by re-reading Task 7's own plan text: nothing in
+this plan ever consumes the `auth`, `form`, `common`, or `toast` namespaces Task 1 ported — every
+visible piece of UI text (card titles, field labels, button text) and every toast notification
+stays hardcoded English regardless of locale. Raised directly with the human partner mid-execution
+(a genuine scope question, not a bug with one obvious answer) — decided: fix now, since a user
+switching locale and still seeing 100% English UI text does not deliver what "i18n" implies, even
+though the spec's literal Goals bullet only promised translated validation messages.
+
+**Files:**
+- Modify: `app/src/shared/i18n/locales/{en,zh-TW,ko-KR}/auth.json` — add two new keys not present
+  in forgekit's original catalog (forgekit's own card/page structure differs from this repo's
+  Card-based one, so no exact equivalent key exists to reuse).
+- Modify: `app/src/features/auth/ui/sign-in-form.tsx`, `sign-up-form.tsx`.
+- Modify: `app/src/features/auth/model/use-sign-in.ts`, `use-sign-up.ts`, `use-sign-out.ts`,
+  `use-social-sign-in.ts`.
+- Modify: `app/src/features/auth/ui/sign-in-form.test.tsx` (one assertion changes; confirmed by
+  re-reading every other existing test assertion in both form test files and all three hook test
+  files against the exact new translated strings — no other test file needs a change: the
+  hook tests only assert `toHaveBeenCalled()` for success, or a mocked real API error message for
+  failure, which takes precedence over the fallback text this task changes).
+
+**Interfaces:** consumes nothing new; produces nothing later in this plan consumes.
+
+- [ ] **Step 1: Add the two missing title keys to `auth.json`**
+
+Add to `app/src/shared/i18n/locales/en/auth.json`'s existing `signIn`/`signUp` objects (add
+`"title"` as a new key alongside the existing keys in each, don't remove or reorder anything else):
+
+```json
+    "signIn": {
+        "title": "Sign in",
+        "subtitle": "Your Application",
+```
+
+```json
+    "signUp": {
+        "title": "Create an account",
+        "subtitle": "Your Application",
+```
+
+Add to `app/src/shared/i18n/locales/zh-TW/auth.json`:
+
+```json
+    "signIn": {
+        "title": "登入",
+        "subtitle": "您的應用程式",
+```
+
+```json
+    "signUp": {
+        "title": "建立帳號",
+        "subtitle": "您的應用程式",
+```
+
+Add to `app/src/shared/i18n/locales/ko-KR/auth.json`:
+
+```json
+    "signIn": {
+        "title": "로그인",
+        "subtitle": "귀하의 애플리케이션",
+```
+
+```json
+    "signUp": {
+        "title": "계정 생성",
+        "subtitle": "귀하의 애플리케이션",
+```
+
+- [ ] **Step 2: Wire `auth`/`form` into `sign-in-form.tsx`**
+
+Add two more `useTranslation` calls alongside the existing `validation` one, and replace every
+hardcoded English string in the JSX with a translated lookup:
+
+```tsx
+  const { t } = useTranslation('validation')
+  const { t: tAuth } = useTranslation('auth')
+  const { t: tForm } = useTranslation('form')
+```
+
+```tsx
+      <CardHeader>
+        <CardTitle>{tAuth('signIn.title')}</CardTitle>
+        <LocaleSwitcher />
+      </CardHeader>
+      <CardContent>
+        <form noValidate onSubmit={form.handleSubmit(onSubmit)}>
+          <FieldGroup>
+            <Field>
+              <Button type="button" variant="outline" onClick={socialSignIn.signIn}>
+                {tAuth('signIn.loginWithSSO')}
+              </Button>
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="email">{tForm('email.label')}</FieldLabel>
+              <Input id="email" type="email" {...form.register('email')} />
+              {form.formState.errors.email && (
+                <FieldDescription role="alert">
+                  {form.formState.errors.email.message}
+                </FieldDescription>
+              )}
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="password">{tForm('password.label')}</FieldLabel>
+              <Input id="password" type="password" {...form.register('password')} />
+              {form.formState.errors.password && (
+                <FieldDescription role="alert">
+                  {form.formState.errors.password.message}
+                </FieldDescription>
+              )}
+            </Field>
+            <Field>
+              <Button type="submit">{tAuth('signIn.loginButton')}</Button>
+            </Field>
+          </FieldGroup>
+        </form>
+      </CardContent>
+```
+
+(The social-sign-in button's copy changes from "Sign in with Microsoft" to the translated
+`signIn.loginWithSSO` — "Login with SSO" in English — matching forgekit's own generic wording
+exactly rather than naming the specific provider; a deliberate, minor copy change, not a bug.)
+
+- [ ] **Step 3: Wire `auth`/`form` into `sign-up-form.tsx`**
+
+```tsx
+  const { t } = useTranslation('validation')
+  const { t: tAuth } = useTranslation('auth')
+  const { t: tForm } = useTranslation('form')
+```
+
+```tsx
+      <CardHeader>
+        <CardTitle>{tAuth('signUp.title')}</CardTitle>
+        <LocaleSwitcher />
+      </CardHeader>
+      <CardContent>
+        <form noValidate onSubmit={form.handleSubmit(onSubmit)}>
+          <FieldGroup>
+            <Field>
+              <FieldLabel htmlFor="name">{tForm('fullName.label')}</FieldLabel>
+              <Input id="name" type="text" {...form.register('name')} />
+              {form.formState.errors.name && (
+                <FieldDescription role="alert">
+                  {form.formState.errors.name.message}
+                </FieldDescription>
+              )}
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="email">{tForm('email.label')}</FieldLabel>
+              <Input id="email" type="email" {...form.register('email')} />
+              {form.formState.errors.email && (
+                <FieldDescription role="alert">
+                  {form.formState.errors.email.message}
+                </FieldDescription>
+              )}
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="password">{tForm('signUp.password.label')}</FieldLabel>
+              <Input id="password" type="password" {...form.register('password')} />
+              {form.formState.errors.password && (
+                <FieldDescription role="alert">
+                  {form.formState.errors.password.message}
+                </FieldDescription>
+              )}
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="confirmPassword">
+                {tForm('signUp.confirmPassword.label')}
+              </FieldLabel>
+              <Input
+                id="confirmPassword"
+                type="password"
+                {...form.register('confirmPassword')}
+              />
+              {form.formState.errors.confirmPassword && (
+                <FieldDescription role="alert">
+                  {form.formState.errors.confirmPassword.message}
+                </FieldDescription>
+              )}
+            </Field>
+            <Field>
+              <Button type="submit">{tAuth('signUp.createAccountButton')}</Button>
+            </Field>
+          </FieldGroup>
+        </form>
+      </CardContent>
+```
+
+- [ ] **Step 4: Wire `toast` into the four mutation hooks**
+
+Modify `app/src/features/auth/model/use-sign-in.ts` — add the `toast` namespace and replace every
+hardcoded English toast string:
+
+```typescript
+import { useMutation } from '@tanstack/react-query'
+import { useRouter } from '@tanstack/react-router'
+import toast from 'react-hot-toast'
+import { useTranslation } from 'react-i18next'
+
+import { authClient } from '#/shared/api'
+
+import type { SignInInput } from './sign-in-schema'
+
+export function useSignIn() {
+  const router = useRouter()
+  const { t } = useTranslation('toast')
+
+  return useMutation({
+    mutationFn: (input: SignInInput) => authClient.signIn.email(input),
+    onSuccess: (result) => {
+      if (result.error) {
+        toast.error(result.error.message ?? t('error.signIn'))
+        return
+      }
+      toast.success(t('success.signIn'))
+      router.navigate({ to: '/{-$locale}/dashboard' })
+    },
+    onError: () => toast.error(t('error.signIn')),
+  })
+}
+```
+
+Modify `app/src/features/auth/model/use-sign-up.ts` — same pattern:
+
+```typescript
+import { useMutation } from '@tanstack/react-query'
+import { useRouter } from '@tanstack/react-router'
+import toast from 'react-hot-toast'
+import { useTranslation } from 'react-i18next'
+
+import { authClient } from '#/shared/api'
+
+import type { SignUpInput } from './sign-up-schema'
+
+export function useSignUp() {
+  const router = useRouter()
+  const { t } = useTranslation('toast')
+
+  return useMutation({
+    mutationFn: (input: SignUpInput) => authClient.signUp.email(input),
+    onSuccess: (result) => {
+      if (result.error) {
+        toast.error(result.error.message ?? t('error.signUp'))
+        return
+      }
+      toast.success(t('success.signUp'))
+      router.navigate({ to: '/{-$locale}/dashboard' })
+    },
+    onError: () => toast.error(t('error.signUp')),
+  })
+}
+```
+
+Modify `app/src/features/auth/model/use-sign-out.ts`:
+
+```typescript
+import { useMutation } from '@tanstack/react-query'
+import { useRouter } from '@tanstack/react-router'
+import toast from 'react-hot-toast'
+import { useTranslation } from 'react-i18next'
+
+import { authClient } from '#/shared/api'
+
+export function useSignOut() {
+  const router = useRouter()
+  const { t } = useTranslation('toast')
+
+  return useMutation({
+    mutationFn: () => authClient.signOut(),
+    onSuccess: (result) => {
+      if (result.error) {
+        toast.error(t('error.signOut'))
+        return
+      }
+      toast.success(t('success.signOut'))
+      router.navigate({ to: '/{-$locale}' })
+    },
+    onError: () => toast.error(t('error.signOut')),
+  })
+}
+```
+
+Modify `app/src/features/auth/model/use-social-sign-in.ts`:
+
+```typescript
+import toast from 'react-hot-toast'
+import { useTranslation } from 'react-i18next'
+
+import { authClient } from '#/shared/api'
+
+/**
+ * Better Auth's client manages the OAuth redirect itself — simpler than forgekit's manual
+ * window.location.href to a Hono-wrapped endpoint, which this repo's architecture doesn't
+ * have (sub-project 1 decided against a BFF layer).
+ */
+export function useSocialSignIn() {
+  const { t } = useTranslation('toast')
+
+  return {
+    signIn: async () => {
+      const result = await authClient.signIn.social({ provider: 'microsoft' })
+      if (result.error) {
+        toast.error(result.error.message ?? t('error.signIn'))
+      }
+    },
+  }
+}
+```
+
+- [ ] **Step 5: Update the one test assertion that assumed the old hardcoded button text**
+
+`sign-in-form.test.tsx`'s submit button text changes from "Sign in" to the translated
+`signIn.loginButton` — "Login" in English. Update both occurrences of
+`screen.getByRole('button', { name: /^sign in$/i })` to:
+
+```typescript
+    await userEvent.click(screen.getByRole('button', { name: /^login$/i }))
+```
+
+No other assertion in either form test file or any of the three hook test files needs to change —
+confirmed by reading each one against the exact new translated strings before writing this task:
+`sign-up-form.test.tsx`'s `/create account/i`, `/name/i`, `/^password/i`, `/confirm password/i`
+all still match the new translated text case-insensitively (`"Create Account"`, `"Full Name"`,
+`"Password"`, `"Confirm Password"`); the hook tests only assert `toHaveBeenCalled()` for success
+(no argument check) or a mocked real API error message for failure (which takes precedence over
+the fallback text this task changes, so the fallback's new translated value is never what those
+specific tests observe).
+
+- [ ] **Step 6: Run the full check suite**
+
+```bash
+cd app
+pnpm check
+pnpm lint
+pnpm lint:fsd
+pnpm test
+pnpm build
+```
+
+Expected: all pass/succeed, same test count as before this task (no test added or removed, one
+assertion changed).
+
+- [ ] **Step 7: Manually verify against a real dev server**
+
+```bash
+cd app
+pnpm dev &
+sleep 5
+
+curl -s http://localhost:3000/sign-in | grep -a -o "Login"        # English submit button
+curl -s http://localhost:3000/zh-TW/sign-in | grep -a -o "登入"    # zh-TW title AND submit button both use this key's translation
+curl -s http://localhost:3000/ko-KR/sign-up | grep -a -o "계정 생성" # ko-KR title and submit button
+
+kill %1
+```
+
+Expected: all three greps find a match (use `grep -a` — a local BSD-grep binary-sniffing quirk
+already seen twice in this plan's own execution otherwise produces a false negative on curl's raw
+HTTP output). This confirms the actual visible page text — not just the validation-error path —
+now renders in the requested locale, closing the gap this task exists to fix.
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add app/src/shared/i18n/locales app/src/features/auth
+git commit -m "feat: translate remaining UI text and toast messages
+
+Task 7 only wired the validation namespace into the schema resolvers
+-- every visible card title, field label, button, and toast
+notification stayed hardcoded English regardless of locale. Wires
+the auth/form/toast namespaces (already ported in Task 1, unused
+until now) into the actual UI, closing the gap between 'the
+infrastructure works' and 'a user who switches locale sees their
+own language.'"
+```
+
+---
+
+### Task 8: Final verification
+
+**Files:** none created or modified — verification only.
+
+**Interfaces:**
+- Consumes: everything from Tasks 1–7.
+- Produces: nothing later in this plan consumes — this is the final task.
+
+- [ ] **Step 1: Manually verify the full locale-prefixed redirect chain against a real dev server**
+
+```bash
+cd app
+pnpm dev &
+sleep 5
+
+# Unauthenticated, non-default locale, protected route: must 307 to the SAME locale's sign-in
+curl -s -i http://localhost:3000/ko-KR/dashboard | grep -i "^location\|^HTTP"
+
+# Sign up a real user, then visit a locale-prefixed protected route with the resulting cookie
+curl -s -i -X POST http://localhost:3000/api/auth/sign-up/email \
+  -H "Content-Type: application/json" \
+  -d '{"email":"i18n-verify@example.com","password":"i18n-verify-pw-123","name":"I18n Verify"}' \
+  > /tmp/i18n-verify-signup.txt
+COOKIE=$(grep -o 'forgekit-tanstack-start.session_token=[^;]*' /tmp/i18n-verify-signup.txt)
+curl -s http://localhost:3000/ko-KR/dashboard -H "Cookie: $COOKIE" | grep -o "Welcome"
+
+rm -f /tmp/i18n-verify-signup.txt
+kill %1
+```
+
+Expected: the unauthenticated request's `location` header is `/ko-KR/sign-in` (locale prefix survives the ABAC redirect chain, proving Task 3's design goal end-to-end); the authenticated request's response body contains `Welcome` (the dashboard still renders correctly on a locale-prefixed path — `/dashboard`'s own route is unaffected by this plan, confirming no regression).
+
+- [ ] **Step 2: Run the full test/check/lint/build suite**
+
+```bash
+cd app
+pnpm test
+pnpm check
+pnpm lint
+pnpm lint:fsd
+pnpm build
+```
+
+Expected: all pass/succeed. `pnpm lint:fsd` reports "No problems found!" — no `insignificant-slice` finding, since `shared/i18n/` and `shared/ui/radial-menu.tsx` are both under the exempt `shared` layer.
+
+- [ ] **Step 3: Run the full family-wide verification suite**
+
+```bash
+cd ..
+pnpm verify
+```
+
+Expected: exits 0 — API, App (now including every test this plan added), OpenSpec, and Secrets all pass.
+
+- [ ] **Step 4: Commit via branch and PR**
+
+```bash
+git checkout -b feat/i18n
+git add -A
+git commit -m "feat: complete i18n port (sub-project 3)
+
+Closes out sub-project 3: full parity with forgekit's 3-locale set
+(en/zh-TW/ko-KR) via react-i18next, locale-aware routing wired into
+the existing ABAC guard without changing its interface, and a real
+LocaleSwitcher (built on a ported RadialMenu primitive) proving the
+whole system end-to-end from the sign-in/sign-up cards."
+git push -u origin feat/i18n
+gh pr create --title "feat: complete i18n port (sub-project 3)" --body "Closes out sub-project 3. Manually verified end-to-end against a real dev server: locale-prefixed redirects preserve their prefix through the ABAC guard's redirect chain, sign-in/sign-up render in the requested locale via SSR, dashboard is unaffected."
+gh pr merge --merge --delete-branch
+git checkout main && git pull --ff-only origin main
+```
+
+**Superseded during execution.** The controller already executed this task's work directly on
+`feat/i18n` throughout the plan (not a fresh branch created at the end), and this family's
+established practice is that the controller merges directly after the final whole-branch review —
+never via a task-dispatched subagent's `gh pr merge`. Step 4 above is not run as written; see
+Task 9 below, then `superpowers:finishing-a-development-branch`.
+
+### Task 9: Reject unsupported locale segments and canonicalize the default-locale prefix away
+
+**Added mid-implementation, not in the original plan.** The whole-branch final review (run after
+Task 8) found that `{-$locale}` matches *any* leading path segment, not just
+`en`/`zh-TW`/`ko-KR`: `/foo/dashboard` renders the real dashboard with `<html lang="en">` (an
+authenticated visitor gets a plausible-looking page under a garbage locale segment, with no 404),
+and `/en/dashboard` is a fully valid duplicate URL of `/dashboard` (the spec's "en has no path
+prefix" convention was only ever enforced by `withLocalePrefix` when *constructing* a redirect
+target, never by the router's own matching when a client requests `/en/...` directly). Not a
+security hole — the ABAC guard in `__root.tsx`'s `beforeLoad` receives the *unstripped* path when
+the leading segment isn't a recognized locale, and its own existing policy still denies/redirects
+appropriately — but it is a real correctness gap: unbounded duplicate URLs, no 404 for a bad
+locale segment, and a bookmarked bad-locale URL silently rendering the wrong (default) language
+forever. Confirmed directly against `@tanstack/router-core@1.171.30`'s installed source before
+writing this task: a route's `params.parse` option (`route.d.ts`'s `ParamsOptions`) returns
+`TParams | false`; `new-process-route-tree.js:571` shows `false` makes that node's match attempt
+return `null` for that URL, which is exactly the "reject this segment" hook needed — no route in
+this plan currently sets `params.parse` anywhere, so this task is additive, not a change to
+Task 3.5's already-reviewed route moves.
+
+**Files:**
+- Create: `app/src/shared/i18n/parse-locale-param.ts`
+- Create: `app/src/shared/i18n/parse-locale-param.test.ts`
+- Create: `app/src/routes/{-$locale}/route.tsx`
+
+**Interfaces:**
+- Consumes: `Locale`/`isLocale` from `#/shared/i18n/config` (Task 1); `DEFAULT_LOCALE` from the
+  `#/shared/i18n` barrel (Task 1); `buildLocale` from `#/shared/i18n/build-locale` (Task 2,
+  already unit-tested — this task adds no new test for it, only a new call site).
+- Produces: `parseLocaleParam(rawLocale: string | undefined): { locale: Locale | undefined } | false`
+  — nothing later in this plan consumes it; it's wired directly into the new route file.
+
+- [ ] **Step 1: Write the failing test for the pure parse function**
+
+Create `app/src/shared/i18n/parse-locale-param.test.ts`:
+
+```typescript
+import { describe, expect, it } from 'vitest'
+
+import { parseLocaleParam } from './parse-locale-param'
+
+describe('parseLocaleParam', () => {
+  it('accepts an absent locale segment as the default (no prefix)', () => {
+    expect(parseLocaleParam(undefined)).toEqual({ locale: undefined })
+  })
+
+  it('accepts each supported locale', () => {
+    expect(parseLocaleParam('en')).toEqual({ locale: 'en' })
+    expect(parseLocaleParam('zh-TW')).toEqual({ locale: 'zh-TW' })
+    expect(parseLocaleParam('ko-KR')).toEqual({ locale: 'ko-KR' })
+  })
+
+  it('rejects a segment that is not a supported locale', () => {
+    expect(parseLocaleParam('foo')).toBe(false)
+    expect(parseLocaleParam('EN')).toBe(false)
+  })
+})
+```
+
+- [ ] **Step 2: Run it to verify it fails**
+
+Run: `cd app && pnpm vitest run src/shared/i18n/parse-locale-param.test.ts`
+Expected: FAIL — `parse-locale-param.ts` does not exist yet.
+
+- [ ] **Step 3: Implement the pure parse function**
+
+Create `app/src/shared/i18n/parse-locale-param.ts`:
+
+```typescript
+import type { Locale } from './config'
+import { isLocale } from './config'
+
+/**
+ * params.parse for the {-$locale} route segment. Returning `false` (rather than accepting any
+ * string) makes TanStack Router's own matching treat an unsupported segment as no match at
+ * all — the router falls through to its not-found handling instead of silently rendering the
+ * default locale for any arbitrary path segment.
+ */
+export function parseLocaleParam(
+  rawLocale: string | undefined,
+): { locale: Locale | undefined } | false {
+  if (rawLocale === undefined) {
+    return { locale: undefined }
+  }
+  return isLocale(rawLocale) ? { locale: rawLocale } : false
+}
+```
+
+- [ ] **Step 4: Run the test to verify it passes**
+
+Run: `cd app && pnpm vitest run src/shared/i18n/parse-locale-param.test.ts`
+Expected: PASS, all 3 cases.
+
+- [ ] **Step 5: Wire it into a new layout route for the `{-$locale}` segment**
+
+Create `app/src/routes/{-$locale}/route.tsx`:
+
+```tsx
+import { createFileRoute, redirect } from '@tanstack/react-router'
+
+import { DEFAULT_LOCALE } from '#/shared/i18n'
+import { buildLocale } from '#/shared/i18n/build-locale'
+import { parseLocaleParam } from '#/shared/i18n/parse-locale-param'
+
+export const Route = createFileRoute('/{-$locale}')({
+  params: {
+    parse: (raw) => parseLocaleParam(raw.locale),
+  },
+  beforeLoad: ({ params, location }) => {
+    if (params.locale === DEFAULT_LOCALE) {
+      throw redirect({
+        to: buildLocale(location.pathname, undefined, undefined).path,
+        replace: true,
+      })
+    }
+  },
+})
+```
+
+No `component` is set — TanStack Router renders `<Outlet />` by default when a route has none
+(confirmed against `@tanstack/react-router@1.170.36`'s `Match.js:98-99`), so the four existing
+child routes (`index.tsx`, `dashboard.tsx`, `sign-in.tsx`, `sign-up.tsx`) keep rendering through
+this layout exactly as before — this file adds matching/redirect behavior only, no new UI.
+
+This task deliberately does not add a custom `notFoundComponent`. No route in this codebase
+configures one today (confirmed by grep), so an unsupported locale segment falls through to
+TanStack Router's own generic default (a plain "Not Found" render) — the same default every
+other unmatched URL in this app already gets. Building a polished 404 page is out of this task's
+scope; the fix here is only that a bad locale segment stops silently rendering the wrong page.
+
+- [ ] **Step 6: Regenerate the route tree**
+
+```bash
+cd app
+pnpm generate-routes
+```
+
+Expected: `app/src/routeTree.gen.ts` picks up the new `route.tsx` as the parent of the four
+existing `{-$locale}` child routes.
+
+- [ ] **Step 7: Run the full check suite**
+
+```bash
+cd app
+pnpm check
+pnpm lint
+pnpm lint:fsd
+pnpm test
+pnpm build
+```
+
+Expected: all pass/succeed. Exactly one new test file (3 new test cases); every other existing
+test still passes unchanged — this task adds a new route file and a new pure function, and
+touches no existing file's logic.
+
+- [ ] **Step 8: Manually verify against a real dev server**
+
+```bash
+cd app
+pnpm dev &
+sleep 5
+
+# Unsupported locale segment must NOT render the real dashboard under the wrong locale.
+# Record the actual status code and response body you observe — TanStack Start's default
+# not-found rendering behavior for an SSR request isn't independently confirmed by this task's
+# author; confirm it yourself and report what you see.
+curl -s -i http://localhost:3000/foo/dashboard | head -5
+curl -s http://localhost:3000/foo/dashboard | grep -a -o "Welcome" || echo "no Welcome text (expected)"
+
+# /en/* must canonicalize to the unprefixed path rather than serving a duplicate URL.
+curl -s -i http://localhost:3000/en/sign-in | grep -i "^HTTP\|^location"
+
+# Existing supported-locale and unprefixed paths must be unaffected (no regression).
+curl -s -i http://localhost:3000/zh-TW/sign-in | grep -i "^HTTP"
+curl -s -i http://localhost:3000/sign-in | grep -i "^HTTP"
+
+kill %1
+```
+
+Expected: `/foo/dashboard` does not contain the string `Welcome` (the real dashboard's greeting) —
+whatever status/body TanStack Router's default not-found render actually produces, it must not be
+the authenticated dashboard content. `/en/sign-in` responds with a redirect whose `location` is
+`/sign-in` (no `/en` prefix). `/zh-TW/sign-in` and `/sign-in` both still return their normal page
+(HTTP 200), confirming Task 3.5's existing routing is unaffected.
+
+- [ ] **Step 9: Commit**
+
+```bash
+git add app/src/shared/i18n/parse-locale-param.ts app/src/shared/i18n/parse-locale-param.test.ts \
+  "app/src/routes/{-\$locale}/route.tsx" app/src/routeTree.gen.ts
+git commit -m "fix: reject unsupported locale segments and canonicalize /en/* away
+
+{-\$locale} matched any leading path segment, not just the three
+supported locales -- an authenticated visitor hitting /foo/dashboard
+got a plausible-looking page under a garbage locale, and /en/* was a
+permanent, unredirected duplicate of the unprefixed path. A new
+params.parse on a {-\$locale}/route.tsx layout rejects unsupported
+segments (falls through to the router's own not-found handling) and
+a beforeLoad redirect canonicalizes the default locale's prefix away,
+reusing the already-tested buildLocale path-stripping logic."
+```
