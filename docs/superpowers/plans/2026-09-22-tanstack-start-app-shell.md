@@ -417,10 +417,21 @@ Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
 - Create: `app/src/shared/ui/nav-user.test.tsx`
 
 **Interfaces:**
-- Consumes: `useUser` from `#/shared/state` (Task 1); `useSignOut` from `#/features/auth`
-  (already exists, unchanged); `Button` from `./button` (already exists); `common:nav.signOut`
-  (Task 2).
-- Produces: `NavUser` (no props) — consumed by Task 5 (`AppSidebar`).
+- Consumes: `useUser` from `#/shared/state` (Task 1); `Button` from `./button` (already exists);
+  `common:nav.signOut` (Task 2).
+- Produces: `NavUser({ onSignOut: () => void })` — consumed by Task 5 (`AppSidebar`), which
+  forwards its own `onSignOut` prop straight through.
+
+**A note on this interface, added after Task 3 was first drafted:** `NavUser` does NOT import
+`useSignOut` from `#/features/auth` directly, even though that mutation already exists unchanged
+and is what actually signs the user out. `shared` is FSD's lowest layer and `features` sits
+above it — steiger's `fsd/forbidden-imports` rule rejects any import from a lower layer into a
+higher one, full stop, with no exception for "the hook is simple." `NavUser` instead takes
+`onSignOut` as a plain callback prop and calls it on click; the actual `useSignOut()` call lives
+in Task 7's `_authenticated/route.tsx` (under `routes/`, a layer steiger does not scan at all —
+confirmed repeatedly in sub-project 3), which threads `onSignOut` down through `AppSidebar` into
+`NavUser`. This is the standard FSD pattern for this exact situation: a low-layer UI component
+stays "dumb" and business logic is injected from above.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -436,8 +447,7 @@ import { createI18nInstance } from '#/shared/i18n'
 
 import { NavUser } from './nav-user'
 
-const { mockUseUser, mockMutate } = vi.hoisted(() => ({
-  mockMutate: vi.fn(),
+const { mockUseUser } = vi.hoisted(() => ({
   mockUseUser: vi.fn(),
 }))
 
@@ -445,15 +455,11 @@ vi.mock('#/shared/state', () => ({
   useUser: mockUseUser,
 }))
 
-vi.mock('#/features/auth', () => ({
-  useSignOut: () => ({ mutate: mockMutate }),
-}))
-
-function renderNavUser() {
+function renderNavUser(onSignOut: () => void) {
   const i18n = createI18nInstance('en')
   return render(
     <I18nextProvider i18n={i18n}>
-      <NavUser />
+      <NavUser onSignOut={onSignOut} />
     </I18nextProvider>,
   )
 }
@@ -462,13 +468,12 @@ describe('NavUser', () => {
   afterEach(() => {
     cleanup()
     mockUseUser.mockReset()
-    mockMutate.mockReset()
   })
 
   it('renders a loading placeholder when user is null', () => {
     mockUseUser.mockReturnValue({ user: null })
 
-    renderNavUser()
+    renderNavUser(vi.fn())
 
     expect(screen.getByTestId('nav-user-loading')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /sign out/i })).not.toBeInTheDocument()
@@ -479,22 +484,23 @@ describe('NavUser', () => {
       user: { email: 'a@example.com', id: '1', name: 'A Person' },
     })
 
-    renderNavUser()
+    renderNavUser(vi.fn())
 
     expect(screen.getByText('A Person')).toBeInTheDocument()
     expect(screen.getByText('a@example.com')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /sign out/i })).toBeInTheDocument()
   })
 
-  it('calls signOut.mutate when the sign-out button is clicked', async () => {
+  it('calls onSignOut when the sign-out button is clicked', async () => {
     mockUseUser.mockReturnValue({
       user: { email: 'a@example.com', id: '1', name: 'A Person' },
     })
+    const onSignOut = vi.fn()
 
-    renderNavUser()
+    renderNavUser(onSignOut)
     await userEvent.click(screen.getByRole('button', { name: /sign out/i }))
 
-    expect(mockMutate).toHaveBeenCalledOnce()
+    expect(onSignOut).toHaveBeenCalledOnce()
   })
 })
 ```
@@ -513,7 +519,6 @@ import { create, props as stylexProps } from '@stylexjs/stylex'
 import { LogOut } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
-import { useSignOut } from '#/features/auth'
 import { useUser } from '#/shared/state'
 import { colors } from '#/shared/lib/tokens.stylex'
 import { Button } from './button'
@@ -552,9 +557,12 @@ const styles = create({
   },
 })
 
-export function NavUser() {
+export interface NavUserProps {
+  onSignOut: () => void
+}
+
+export function NavUser({ onSignOut }: NavUserProps) {
   const { user } = useUser()
-  const signOut = useSignOut()
   const { t } = useTranslation('common')
 
   const containerProps = stylexProps(styles.container)
@@ -587,7 +595,7 @@ export function NavUser() {
         variant="ghost"
         size="icon"
         aria-label={t('nav.signOut')}
-        onClick={() => signOut.mutate()}
+        onClick={onSignOut}
       >
         <LogOut />
       </Button>
@@ -608,10 +616,13 @@ git add app/src/shared/ui/nav-user.tsx app/src/shared/ui/nav-user.test.tsx
 git commit -m "feat: add NavUser component
 
 Shows the signed-in user's name/email from the existing (previously
-unused) zustand store, with a sign-out action reusing the existing
-useSignOut() mutation unchanged. No Profile/Notifications/etc items --
-none of those pages exist, matching this port's explicit decision to
-avoid forgekit's dead-link nav pattern.
+unused) zustand store. Sign-out is a plain onSignOut callback prop,
+not a direct useSignOut() import -- shared is FSD's lowest layer and
+features sits above it, so shared/ui code cannot import from
+features/auth without violating steiger's forbidden-imports rule.
+The real useSignOut() call lives in Task 7's route file instead. No
+Profile/Notifications/etc items -- none of those pages exist, matching
+this port's explicit decision to avoid forgekit's dead-link nav pattern.
 
 Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
 ```
@@ -809,9 +820,13 @@ Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
 
 **Interfaces:**
 - Consumes: `useUI` from `#/shared/state` (Task 1); `useIsMobile` from
-  `#/shared/lib/use-is-mobile` (Task 1); `NavMain` (Task 4); `NavUser` (Task 3); `Button` from
+  `#/shared/lib/use-is-mobile` (Task 1); `NavMain` (Task 4); `NavUser({ onSignOut })` (Task 3,
+  amended after a real `fsd/forbidden-imports` failure — see Task 3's own note); `Button` from
   `./button`.
-- Produces: `AppSidebar` (no props) — consumed by Task 7 (`_authenticated/route.tsx`).
+- Produces: `AppSidebar({ onSignOut: () => void })` — consumed by Task 7
+  (`_authenticated/route.tsx`), which owns the actual `useSignOut()` call and passes it down.
+  `AppSidebar` itself does no sign-out logic; it only forwards the prop to `NavUser`, for the
+  same layer-boundary reason `NavUser` doesn't call `useSignOut()` directly.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -858,7 +873,7 @@ describe('AppSidebar', () => {
     mockUseUI.mockReturnValue({ sidebarOpen: true, toggleSidebar: mockToggleSidebar })
     mockUseIsMobile.mockReturnValue(false)
 
-    render(<AppSidebar />)
+    render(<AppSidebar onSignOut={vi.fn()} />)
 
     expect(screen.getByTestId('nav-main')).toBeInTheDocument()
     expect(screen.getByTestId('nav-user')).toBeInTheDocument()
@@ -868,7 +883,7 @@ describe('AppSidebar', () => {
     mockUseUI.mockReturnValue({ sidebarOpen: false, toggleSidebar: mockToggleSidebar })
     mockUseIsMobile.mockReturnValue(false)
 
-    render(<AppSidebar />)
+    render(<AppSidebar onSignOut={vi.fn()} />)
 
     expect(screen.getByTestId('app-sidebar')).toHaveAttribute('data-open', 'false')
   })
@@ -877,7 +892,7 @@ describe('AppSidebar', () => {
     mockUseUI.mockReturnValue({ sidebarOpen: true, toggleSidebar: mockToggleSidebar })
     mockUseIsMobile.mockReturnValue(true)
 
-    render(<AppSidebar />)
+    render(<AppSidebar onSignOut={vi.fn()} />)
     await userEvent.click(screen.getByTestId('app-sidebar-backdrop'))
 
     expect(mockToggleSidebar).toHaveBeenCalledOnce()
@@ -887,7 +902,7 @@ describe('AppSidebar', () => {
     mockUseUI.mockReturnValue({ sidebarOpen: true, toggleSidebar: mockToggleSidebar })
     mockUseIsMobile.mockReturnValue(false)
 
-    render(<AppSidebar />)
+    render(<AppSidebar onSignOut={vi.fn()} />)
 
     expect(screen.queryByTestId('app-sidebar-backdrop')).not.toBeInTheDocument()
   })
@@ -960,7 +975,11 @@ const styles = create({
   },
 })
 
-export function AppSidebar() {
+export interface AppSidebarProps {
+  onSignOut: () => void
+}
+
+export function AppSidebar({ onSignOut }: AppSidebarProps) {
   const { sidebarOpen, toggleSidebar } = useUI()
   const isMobile = useIsMobile()
 
@@ -994,7 +1013,7 @@ export function AppSidebar() {
         </div>
         <NavMain />
         <div style={{ flex: 1 }} />
-        <NavUser />
+        <NavUser onSignOut={onSignOut} />
       </div>
     </>
   )
@@ -1199,7 +1218,11 @@ Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
 - Modify: `app/src/routeTree.gen.ts` (regenerated, not hand-edited)
 
 **Interfaces:**
-- Consumes: `AppSidebar` (Task 5), `AppHeader` (Task 6), `common:dashboard.welcome` (Task 2).
+- Consumes: `AppSidebar({ onSignOut })` (Task 5, amended — see Task 3's note on why sign-out is
+  prop-driven), `AppHeader` (Task 6), `common:dashboard.welcome` (Task 2), `useSignOut` from
+  `#/features/auth` (already exists, unchanged) — this route file is the one place in the whole
+  shell allowed to import it directly, since `routes/` is not a layer steiger's FSD rules scan
+  (confirmed repeatedly in sub-project 3), unlike `shared/ui`.
 - Produces: nothing later in this plan consumes — this is the last code-writing task.
 
 - [ ] **Step 1: Create the layout route**
@@ -1210,6 +1233,7 @@ Create `app/src/routes/{-$locale}/_authenticated/route.tsx`:
 import { Outlet, createFileRoute } from '@tanstack/react-router'
 import { create, props as stylexProps } from '@stylexjs/stylex'
 
+import { useSignOut } from '#/features/auth'
 import { AppHeader } from '#/shared/ui/app-header'
 import { AppSidebar } from '#/shared/ui/app-sidebar'
 
@@ -1234,13 +1258,14 @@ const styles = create({
 })
 
 function AuthenticatedLayout() {
+  const signOut = useSignOut()
   const shellProps = stylexProps(styles.shell)
   const mainProps = stylexProps(styles.main)
   const contentProps = stylexProps(styles.content)
 
   return (
     <div className={shellProps.className} style={shellProps.style}>
-      <AppSidebar />
+      <AppSidebar onSignOut={() => signOut.mutate()} />
       <div className={mainProps.className} style={mainProps.style}>
         <AppHeader />
         <main className={contentProps.className} style={contentProps.style}>
@@ -1254,7 +1279,9 @@ function AuthenticatedLayout() {
 
 This route's `beforeLoad` does nothing auth-related (per this plan's Global Constraints) — it
 exists purely to compose the shell UI. `dashboard.tsx`'s own `requireSession()` call (Step 2)
-still does the actual auth gating, unchanged.
+still does the actual auth gating, unchanged. The `useSignOut()` call here is the ONE real
+sign-out wiring point in the whole shell — `AppSidebar`/`NavUser` only ever see the resulting
+`onSignOut` callback, per Task 3's layer-boundary note.
 
 - [ ] **Step 2: Move `dashboard.tsx` under the new layout**
 
