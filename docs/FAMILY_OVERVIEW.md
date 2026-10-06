@@ -67,12 +67,17 @@ survives either way, and the package would add release overhead without removing
 that varies by stack is declared by the consuming repository in `package.json`:
 
 ```jsonc
-"forgekit": {
+"workflow": {
   "sourceGlobs":     ["*.swift"],            // what counts as source, for index freshness
   "requiredTools":   ["tuist", "xcodebuild"], // machine-level tools this stack needs
   "nodeSubprojects": []                       // nested npm projects with their own scripts
 }
 ```
+
+Named `workflow`, not `forgekit`: the base ForgeKit repo generates products via a `dotnet new`
+template that replaces every literal `forgekit` with the product's name, including a JSON key
+spelled that way, which would desync from this byte-for-byte-shared script on the first
+`pnpm sync-workflow` after generation. `workflow` contains no substring the template rewrites.
 
 `sourceGlobs` names the *subject* of a measurement, so an empty one is a failure — falling back
 to "every tracked file" would silently change what is being measured. `nodeSubprojects` only

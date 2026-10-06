@@ -43,7 +43,7 @@ Never synced, because it is the part that differs:
 
 - `openspec/config.yaml`'s `schema:` and `context:` blocks — its stack, layout, conventions
 - `scripts/verify.sh` — how that stack builds and tests
-- `package.json` — including the `forgekit` block below
+- `package.json` — including the `workflow` block below
 - `AGENTS.md`, `docs/`, and everything that is actually the product
 
 ## The stack declaration
@@ -51,12 +51,19 @@ Never synced, because it is the part that differs:
 `preflight.sh` is shared verbatim, so each repository tells it what stack it is looking at:
 
 ```jsonc
-"forgekit": {
+"workflow": {
   "sourceGlobs":     ["*.swift"],       // what counts as source, for index freshness
   "requiredTools":   ["xcodebuild"],    // machine-level tools this stack cannot work without
   "nodeSubprojects": ["app"]            // nested npm projects with their own scripts and bins
 }
 ```
+
+Named `workflow`, not `forgekit`: the base ForgeKit repo generates products via a `dotnet new`
+template that replaces every literal `forgekit` with the product's name, including a JSON key
+spelled that way. The generated `package.json` and the just-generated copy of `preflight.sh`
+would agree at that moment, but a later `pnpm sync-workflow` pulls `preflight.sh` fresh from
+here with the literal string restored, and the two go silently out of sync. `workflow` contains
+no substring the template rewrites, so it survives generation and every later sync unchanged.
 
 Omitting `sourceGlobs` is a failure, not a default: without it the freshness check would
 compare the index against every tracked file and move on a README edit, quietly measuring
