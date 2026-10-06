@@ -72,7 +72,7 @@ something other than source.
 ## Adding a new repository
 
 ```bash
-cp <this-repo>/templates/package.json         ./package.json      # then fill in the forgekit block
+cp <this-repo>/templates/package.json         ./package.json      # then fill in the workflow block
 cp <this-repo>/templates/pnpm-workspace.yaml  ./pnpm-workspace.yaml
 git remote add workflow https://github.com/Zuexx/forgekit-workflow.git
 git fetch workflow main
@@ -122,6 +122,27 @@ pnpm sync-workflow && pnpm preflight
 When a sync **adds** a shared file, run `pnpm sync-workflow` twice: the first run replaces
 `sync-workflow.sh` itself but is already executing the old list, so the new path only arrives
 on the second run.
+
+## Staying synced is a choice, not an obligation
+
+Early on, while a consuming repository still looks like the starter kit it came from, every
+sync is close to free: the shared files rarely conflict with anything product-specific, and a
+fix like the `forgekit`/`workflow` key rename lands without the product's own team tracking it
+down themselves. Nothing here requires that to continue forever.
+
+The sync mechanism overwrites by path with no diff and no conflict warning — `git show
+workflow/main:$path > $path`, unconditionally. That is fine as long as the shared paths stay
+untouched locally. It stops being fine the moment a product's own needs genuinely diverge from
+the base kit — a different branch-protection policy, a `preflight.sh` check customized for a
+quirk in that stack's CI, a team that doesn't use the OpenSpec/Claude workflow the same way.
+Past that point, every `pnpm sync-workflow` is a blind overwrite of whatever local edit was made
+to a path this repository no longer actually treats as shared, and the loss is silent.
+
+Treat it the way forgekit's own `docs/FORKING_GUIDE.md` treats syncing the API's Anvil layer
+from upstream: a deliberate, reviewed pull for a specific fix you want, not a standing
+obligation to run before every change. To stop entirely, `git remote remove workflow` and say so
+in the consuming repository's own `AGENTS.md` — a future reader should find a stated decision,
+not go looking for a sync that will never run again.
 
 ## Editing the workflow
 
