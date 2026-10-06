@@ -15,11 +15,21 @@ FAILED=0
 # stack-specific it needs is declared by the repository rather than written in here.
 # package.json:
 #
-#   "forgekit": {
+#   "workflow": {
 #     "sourceGlobs":      ["*.swift"],        # what counts as source, for index freshness
 #     "requiredTools":    ["xcodebuild"],     # machine-level tools this stack cannot work without
 #     "nodeSubprojects":  ["app"]             # nested npm projects with their own scripts and bins
 #   }
+#
+# Named "workflow", not "forgekit": the base ForgeKit repo generates products via a `dotnet new`
+# template whose effectiveSlug replaces every literal "forgekit" with the product's name --
+# including this JSON key, if it were spelled that way. The generated package.json and this
+# synced copy of the script would agree at generation time (both rewritten together), but a
+# later `pnpm sync-workflow` pulls this script fresh from upstream with the literal string
+# restored, and the two fall out of sync silently: the lookup below finds nothing, every
+# declared value reads back as unset, and no check here can tell the difference between that
+# and a repository that genuinely declared nothing. "workflow" contains no substring the
+# template rewrites, so it survives generation and every later sync unchanged.
 #
 # Read with a while-loop rather than `mapfile`: stock macOS ships bash 3.2, which has no
 # mapfile, and the shebang resolves there on a machine without a newer bash installed.
@@ -27,7 +37,7 @@ read_declared() {
   node -e '
     const fs = require("fs");
     let cfg = {};
-    try { cfg = (JSON.parse(fs.readFileSync(process.argv[1], "utf8")).forgekit) || {}; } catch (e) {}
+    try { cfg = (JSON.parse(fs.readFileSync(process.argv[1], "utf8")).workflow) || {}; } catch (e) {}
     const value = cfg[process.argv[2]];
     // Terminate every line, including the last. `read` returns false on an unterminated
     // final line and the loop below would discard it -- which for a one-element array means
@@ -72,14 +82,14 @@ done
 # generator cannot live in node_modules, so PATH is the only place it can be. What that costs
 # is a weaker guarantee, and the report says which kind of answer it is giving.
 if [ "${#REQUIRED_TOOLS[@]}" -eq 0 ]; then
-  echo "  --    no stack tools declared (package.json: forgekit.requiredTools)"
+  echo "  --    no stack tools declared (package.json: workflow.requiredTools)"
 else
   for tool in "${REQUIRED_TOOLS[@]}"; do
     if command -v "$tool" >/dev/null 2>&1; then
       pass "$tool (on PATH)"
     else
       fail "$tool is declared by this repository but is not on PATH" \
-           "install $tool, or drop it from forgekit.requiredTools in package.json"
+           "install $tool, or drop it from workflow.requiredTools in package.json"
     fi
   done
 fi
@@ -143,7 +153,7 @@ else
     # still produce a number — a wrong one, moved by a README edit. Quietly measuring
     # something other than source is worse than measuring nothing, so this is a failure.
     fail "no source globs declared, so index freshness cannot be measured" \
-         "add forgekit.sourceGlobs to package.json"
+         "add workflow.sourceGlobs to package.json"
   else
     newest_src=$(git -C "$ROOT_DIR" ls-files -z -- "${SOURCE_GLOBS[@]}" 2>/dev/null \
       | xargs -0 stat "${STAT_MTIME[@]}" 2>/dev/null | sort -rn | head -1)
@@ -151,7 +161,7 @@ else
       # Enumeration produced nothing — no git, no stat, or the declared globs match no tracked
       # file. Whatever the cause, the freshness of the index is unknown, and unknown is not ok.
       fail "cannot determine whether the index is current" \
-           "check git and stat, and that forgekit.sourceGlobs matches tracked files, then: pnpm exec codegraph index"
+           "check git and stat, and that workflow.sourceGlobs matches tracked files, then: pnpm exec codegraph index"
     elif [ "$index_epoch" -lt "$newest_src" ]; then
       fail "index is older than the newest source file — impact analysis from it would be out of date" \
            "pnpm exec codegraph index"
@@ -354,7 +364,7 @@ while IFS= read -r cap; do
         pass "$cap (declared tool)"
       else
         fail "\`$cap\` is not in the declared toolchain" \
-             "correct it in AGENTS.md, or declare it in package.json (devDependencies or forgekit.requiredTools)"
+             "correct it in AGENTS.md, or declare it in package.json (devDependencies or workflow.requiredTools)"
       fi
       ;;
   esac
