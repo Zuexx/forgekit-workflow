@@ -29,18 +29,23 @@ contains() {
 work="$(mktemp -d "${TMPDIR:-/tmp}/dependabot-auto-merge-test.XXXXXX")"
 trap 'rm -rf "$work"' EXIT
 
-# Pull the real run: block out of the workflow's second step, so this test exercises what ships.
+# Pull the real run: block out of the workflow's merge/poll step ("Wait for the other checks on
+# this PR, then merge"), found by name rather than a hardcoded index — a gate step was inserted
+# before it (see test/dependabot-auto-merge-gate.test.sh), and indexing by position would have
+# silently started testing the wrong step's body instead of failing loudly.
 script_body="$(npx --yes js-yaml "$WORKFLOW" 2>/dev/null | python3 -c '
 import json, sys
 d = json.load(sys.stdin)
-print(d["jobs"]["auto-merge"]["steps"][1]["run"])
+steps = d["jobs"]["auto-merge"]["steps"]
+matches = [s for s in steps if s.get("name", "").startswith("Wait for the other checks")]
+assert len(matches) == 1, f"expected exactly one matching step, found {len(matches)}"
+print(matches[0]["run"])
 ')"
 [ -n "$script_body" ] || { echo "FAIL: could not extract the polling script from the workflow"; exit 1; }
-# The workflow's ${{ ... }} expressions are substituted by GitHub Actions before bash ever sees
-# them; extracted raw, they're not valid bash. They appear only in one informational echo line
-# here, so replacing them with a placeholder keeps the script's actual logic — everything this
-# test verifies — untouched.
-script_body="$(printf '%s\n' "$script_body" | sed -E 's/\$\{\{[^}]*\}\}/PLACEHOLDER/g')"
+# This step's run: body takes every GitHub Actions ${{ ... }} value in through env: (DEPENDENCY_NAMES,
+# UPDATE_TYPE, PR_URL, GH_TOKEN, SELF_CHECK — see the P1-2 fix), so the extracted text is already
+# valid bash with no substitution needed; run_scenario() below sets each of those as a real
+# shell env var before running it.
 printf '#!/usr/bin/env bash\n%s\n' "$script_body" > "$work/poll.sh"
 chmod +x "$work/poll.sh"
 
@@ -83,6 +88,7 @@ run_scenario() {  # name  responses_content
   STUB_DIR="$dir" RESPONSES="$dir/responses" \
     PR_URL="https://example.invalid/pr/1" GH_TOKEN=dummy \
     SELF_CHECK="Dependabot auto-merge" \
+    DEPENDENCY_NAMES="some-package" UPDATE_TYPE="version-update:semver-patch" \
     PATH="$work/bin:$PATH" \
     bash "$work/poll.sh" > "$dir/out.log" 2>&1
   echo $?
@@ -108,6 +114,13 @@ check "a failing check aborts (non-zero exit)" fail "$code"
 code="$(run_scenario self-excluded '[{"name":"Dependabot auto-merge","bucket":"pending"},{"name":"App","bucket":"pass"}]')"
 check "the job's own check is excluded from what it waits on" pass "$code"
 [ -f "$work/self-excluded/merge_log" ] && echo "PASS: gh pr merge was called (self check correctly ignored)" || { echo "FAIL: gh pr merge was not called — self-exclusion likely broken"; fails=$((fails+1)); }
+
+# E — the informational echo line reads DEPENDENCY_NAMES/UPDATE_TYPE from env:, not a raw
+# ${{ ... }} interpolation (the P1-2 fix). A regression here would either leave a literal
+# "${{ ... }}" in the output (never substituted, since this runs as plain bash) or blow up under
+# set -u on an unset variable — either way this line's content would stop matching.
+contains "the eligibility line reports the real dependency name and update type" \
+  "$(cat "$work/immediate-pass/out.log")" "eligible: some-package (version-update:semver-patch)"
 
 echo
 if [ "$fails" -eq 0 ]; then echo "all dependabot-auto-merge checks passed"; exit 0; else echo "$fails check(s) failed"; exit 1; fi
