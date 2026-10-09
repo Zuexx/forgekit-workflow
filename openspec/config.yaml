@@ -23,7 +23,13 @@ context: |
   ## The graph cannot see this repository
 
   Everything here is a shell script, a JSON or YAML declaration, or Markdown. CodeGraph indexes
-  symbols and ships no extractor for any of them, so `codegraph_explore` returns nothing.
+  symbols and ships no extractor for any of them, so even a running `codegraph_explore` would
+  return nothing here. But in a clean checkout of this repository specifically, the CodeGraph
+  MCP server declared in `.mcp.json` cannot even start: it points at
+  `./node_modules/.bin/codegraph`, and this repository's own `package.json` deliberately does
+  not declare `@colbymchenry/codegraph` as a dependency (it is not a "project" — see that file's
+  own leading comment), so that binary does not exist here. The four consuming repositories do
+  declare it and do not have this problem; only `forgekit-workflow` itself does.
 
   The proposal rule requiring the Impact section to be grounded in the graph is satisfied here
   through the alternative the rule itself names: search the literal separately, and say in the

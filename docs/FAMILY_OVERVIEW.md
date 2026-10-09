@@ -32,7 +32,7 @@ repository, and the four starters consume it.
 
 ## How the sharing works
 
-`forgekit-workflow` owns nine files. Each consuming repository adds it as a second git remote
+`forgekit-workflow` owns ten files. Each consuming repository adds it as a second git remote
 and runs `pnpm sync-workflow`, which copies those files in and splices the shared OpenSpec rules
 into the repository's own `openspec/config.yaml` below a marker line.
 
