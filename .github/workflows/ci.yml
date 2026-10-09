@@ -1,0 +1,56 @@
+name: CI
+
+# Runs on every normal pull request (human- or agent-authored), not just Dependabot's — closing
+# the gap described in the review that found no automation ran test/*.test.sh or
+# `openspec validate` before merge: both ran only by someone remembering to do it by hand.
+# See .github/workflows/dependabot-auto-merge.yml for the separate workflow that only acts on
+# Dependabot PRs.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Shell tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 11.1.1
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      # Each test file extracts the real `run:` body of a workflow step via `npx js-yaml`, which
+      # needs node (above) to fetch and run. jq and python3 are preinstalled on this runner image.
+      - name: Run shell test suites
+        run: |
+          set -euo pipefail
+          for f in test/*.test.sh; do
+            echo "=== $f ==="
+            bash "$f"
+          done
+
+  openspec:
+    name: OpenSpec validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 11.1.1
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec openspec validate --all --strict
