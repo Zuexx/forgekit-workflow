@@ -20,6 +20,6 @@
   "devDependencies": {
     "@colbymchenry/codegraph": "^1.6.0",
     "@fission-ai/openspec": "^1.13.1",
-    "grillme": "latest"
+    "grillme": "^0.1.2"
   }
 }
